@@ -16,7 +16,7 @@ pipeline {
         JFROG_CLI    = tool 'jfrog-cli'
         IMAGE_REPO   = "profilemappimg"
         JFROG_SERVER = "jfrog-instance"
-        JFROG_URL    = "https://yourcompany.jfrog.io"
+        JFROG_URL    = "http://3.110.216.190:8082"
         JFROG_DOCKER_REPO = "docker-local"
         JFROG_MAVEN_REPO  = "maven-local"
     }
@@ -24,7 +24,9 @@ pipeline {
     stages {
 
         stage("Clean Workspace") {
-            steps { cleanWs() }
+            steps {
+                cleanWs()
+            }
         }
 
         stage("Checkout Code") {
@@ -42,12 +44,20 @@ pipeline {
 
         stage("Publish Artifact to JFrog") {
             steps {
-                withCredentials([string(credentialsId: 'jfrog-api-key', variable: 'JFROG_API_KEY')]) {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'jfrog-cred',
+                        usernameVariable: 'JF_USER',
+                        passwordVariable: 'JF_PASS'
+                    )
+                ]) {
                     sh '''
                         $JFROG_CLI/jf config add $JFROG_SERVER \
                         --url=$JFROG_URL \
-                        --access-token=$JFROG_API_KEY \
-                        --interactive=false
+                        --user=$JF_USER \
+                        --password=$JF_PASS \
+                        --interactive=false \
+                        --insecure-tls=true
 
                         $JFROG_CLI/jf rt upload "target/*.war" \
                         $JFROG_MAVEN_REPO/ \
@@ -110,43 +120,31 @@ pipeline {
             }
         }
 
-        stage("Push Image to JFrog & Xray Scan") {
+        stage("Push Image to JFrog") {
             steps {
                 withCredentials([
                     usernamePassword(
-                        credentialsId: 'jfrog-docker-login',
+                        credentialsId: 'jfrog-cred',
                         usernameVariable: 'JF_USER',
                         passwordVariable: 'JF_PASS'
                     )
                 ]) {
                     script {
 
-                        def JFROG_IMAGE = "${JFROG_URL.replace('https://','')}/${JFROG_DOCKER_REPO}/${IMAGE_REPO}:${env.TAG}"
+                        def JFROG_HOST = JFROG_URL.replace('http://','')
+                        def JFROG_IMAGE = "${JFROG_HOST}/${JFROG_DOCKER_REPO}/${IMAGE_REPO}:${env.TAG}"
 
                         sh """
-                            docker login ${JFROG_URL.replace('https://','')} \
-                            -u ${JF_USER} -p ${JF_PASS}
-
+                            docker login ${JFROG_HOST} -u ${JF_USER} -p ${JF_PASS}
                             docker tag temp-image:${env.TAG} ${JFROG_IMAGE}
                             docker push ${JFROG_IMAGE}
-                        """
-
-                        sh """
-                            $JFROG_CLI/jf rt build-collect-env
-                            $JFROG_CLI/jf rt build-publish vprofile ${BUILD_NUMBER}
-                        """
-
-                        sh """
-                            $JFROG_CLI/jf xr scan vprofile/${BUILD_NUMBER} \
-                            --server-id=${JFROG_SERVER} \
-                            --fail=true
                         """
                     }
                 }
             }
         }
 
-        stage("Push to ECR (After Xray Pass)") {
+        stage("Push to ECR") {
             steps {
                 withCredentials([
                     string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
@@ -154,6 +152,7 @@ pipeline {
                     [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']
                 ]) {
                     script {
+
                         def ECR_URL = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
                         def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${env.TAG}"
 
@@ -202,7 +201,6 @@ pipeline {
 
         stage("DAST - OWASP ZAP") {
             when {
-                beforeAgent true
                 expression { params.SKIP_DAST == false }
             }
             steps {
