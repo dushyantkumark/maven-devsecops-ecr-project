@@ -13,7 +13,7 @@ pipeline {
 
     environment {
         SCANNER_HOME = tool 'sonar-scanner'
-        IMAGE_REPO = "profilemappimg"
+        IMAGE_REPO   = "profilemappimg"
     }
 
     stages {
@@ -58,9 +58,13 @@ pipeline {
 
         stage("OWASP Dependency Check") {
             steps {
-                dependencyCheck additionalArguments: '--scan .',
-                odcInstallation: 'dp-check'
-                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+                dependencyCheck(
+                    additionalArguments: '--scan .',
+                    odcInstallation: 'dp-check'
+                )
+                dependencyCheckPublisher(
+                    pattern: '**/dependency-check-report.xml'
+                )
             }
         }
 
@@ -75,14 +79,14 @@ pipeline {
                 script {
                     def tag = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG : BUILD_NUMBER
                     env.TAG = tag
-                    sh "docker build -t temp-image:${tag} ."
+                    sh "docker build -t temp-image:${env.TAG} ."
                 }
             }
         }
 
         stage("Trivy Image Scan") {
             steps {
-                sh "trivy image --severity HIGH,CRITICAL temp-image:${TAG}"
+                sh "trivy image --severity HIGH,CRITICAL temp-image:${env.TAG}"
             }
         }
 
@@ -94,23 +98,16 @@ pipeline {
                     [$class: 'AmazonWebServicesCredentialsBinding',
                      credentialsId: 'awscred']
                 ]) {
-
                     script {
-
                         def ECR_URL = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-                        def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${TAG}"
-
-                        echo "AWS Account: ${AWS_ACCOUNT_ID}"
-                        echo "AWS Region : ${AWS_REGION}"
-                        echo "ECR URL    : ${ECR_URL}"
-                        echo "Final Image: ${FINAL_IMAGE}"
+                        def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${env.TAG}"
 
                         sh """
                         aws ecr get-login-password --region ${AWS_REGION} \
                         | docker login --username AWS --password-stdin ${ECR_URL}
                         """
 
-                        sh "docker tag temp-image:${TAG} ${FINAL_IMAGE}"
+                        sh "docker tag temp-image:${env.TAG} ${FINAL_IMAGE}"
                         sh "docker push ${FINAL_IMAGE}"
                     }
                 }
@@ -131,9 +128,16 @@ pipeline {
                         string(credentialsId: 'region', variable: 'AWS_REGION')
                     ]) {
                         def ECR_URL = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-                        def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${TAG}"
+                        def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${env.TAG}"
 
-                        sh "docker rm -f vprofile || true"
+                        sh '''
+                        EXISTING=$(docker ps -q --filter "publish=80")
+                        if [ -n "$EXISTING" ]; then
+                            docker stop $EXISTING
+                            docker rm $EXISTING
+                        fi
+                        '''
+
                         sh "docker run -d --name vprofile -p 80:8080 ${FINAL_IMAGE}"
                     }
                 }
@@ -142,16 +146,19 @@ pipeline {
 
         stage("DAST - OWASP ZAP") {
             when {
-                expression { return !params.SKIP_DAST }
+                beforeAgent true
+                expression { params.SKIP_DAST == false }
             }
             steps {
-                sh """
+                sh '''
                 docker run --rm --network host \
-                -v \$(pwd):/zap/wrk:rw \
-                zaproxy/zap-stable zap-baseline.py \
-                -t http://localhost \
-                -r zap_report.html -J zap_report.json
-                """
+                  -v "$WORKSPACE:/zap/wrk:rw" \
+                  zaproxy/zap-stable \
+                  zap-baseline.py \
+                  -t http://localhost \
+                  -r zap_report.html \
+                  -J zap_report.json
+                '''
                 archiveArtifacts artifacts: 'zap_report.html,zap_report.json', allowEmptyArchive: true
             }
         }
