@@ -13,19 +13,7 @@ pipeline {
 
     environment {
         SCANNER_HOME = tool 'sonar-scanner'
-
-        // Using Global Variables from Jenkins
-        AWS_ACCOUNT_ID = "${accountid}"
-        AWS_REGION     = "${region}"
-
-        //IMAGE_REPO     = "vprofileappimg"
-        IMAGE_REPO     = "profilemappimg"
-        IMAGE_TAG      = "${BUILD_NUMBER}"
-
-        ECR_URL        = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-        IMAGE_NAME     = "${ECR_URL}/${IMAGE_REPO}"
-
-        registryCredential = 'awscreds'
+        IMAGE_REPO = "profilemappimg"
     }
 
     stages {
@@ -41,7 +29,7 @@ pipeline {
             }
         }
 
-        stage("Build") {
+        stage("Build Application") {
             steps {
                 sh 'mvn clean install -DskipTests'
             }
@@ -85,48 +73,70 @@ pipeline {
         stage("Build Docker Image") {
             steps {
                 script {
-                    def tag = params.IMAGE_TAG ? params.IMAGE_TAG : BUILD_NUMBER
-                    env.FINAL_IMAGE = "${IMAGE_NAME}:${tag}"
-
-                    sh "docker build -t ${env.FINAL_IMAGE} ."
+                    def tag = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG : BUILD_NUMBER
+                    env.TAG = tag
+                    sh "docker build -t temp-image:${tag} ."
                 }
             }
         }
 
         stage("Trivy Image Scan") {
             steps {
-                sh "trivy image --severity HIGH,CRITICAL ${env.FINAL_IMAGE}"
+                sh "trivy image --severity HIGH,CRITICAL temp-image:${TAG}"
             }
         }
 
-        stage("Login to AWS ECR") {
+        stage("Login, Tag & Push to ECR") {
             steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding',
-                                  credentialsId: 'awscreds']]) {
-                    sh """
-                    aws ecr get-login-password --region ${AWS_REGION} \
-                    | docker login --username AWS --password-stdin ${ECR_URL}
-                    """
+                withCredentials([
+                    string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
+                    string(credentialsId: 'region', variable: 'AWS_REGION'),
+                    [$class: 'AmazonWebServicesCredentialsBinding',
+                     credentialsId: 'awscred']
+                ]) {
+
+                    script {
+
+                        def ECR_URL = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+                        def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${TAG}"
+
+                        echo "AWS Account: ${AWS_ACCOUNT_ID}"
+                        echo "AWS Region : ${AWS_REGION}"
+                        echo "ECR URL    : ${ECR_URL}"
+                        echo "Final Image: ${FINAL_IMAGE}"
+
+                        sh """
+                        aws ecr get-login-password --region ${AWS_REGION} \
+                        | docker login --username AWS --password-stdin ${ECR_URL}
+                        """
+
+                        sh "docker tag temp-image:${TAG} ${FINAL_IMAGE}"
+                        sh "docker push ${FINAL_IMAGE}"
+                    }
                 }
-            }
-        }
-
-        stage("Push Image to ECR") {
-            steps {
-                sh "docker push ${env.FINAL_IMAGE}"
             }
         }
 
         stage("Manual Approval") {
             steps {
-                input message: "Approve deployment?"
+                input message: "Approve Deployment?"
             }
         }
 
         stage("Deploy Container") {
             steps {
-                sh "docker rm -f vprofile || true"
-                sh "docker run -d --name vprofile -p 80:8080 ${env.FINAL_IMAGE}"
+                script {
+                    withCredentials([
+                        string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
+                        string(credentialsId: 'region', variable: 'AWS_REGION')
+                    ]) {
+                        def ECR_URL = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+                        def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${TAG}"
+
+                        sh "docker rm -f vprofile || true"
+                        sh "docker run -d --name vprofile -p 80:8080 ${FINAL_IMAGE}"
+                    }
+                }
             }
         }
 
