@@ -18,7 +18,8 @@ pipeline {
         AWS_ACCOUNT_ID = "${accountid}"
         AWS_REGION     = "${region}"
 
-        IMAGE_REPO     = "vprofileappimg"
+        //IMAGE_REPO     = "vprofileappimg"
+        IMAGE_REPO     = "profilemappimg"
         IMAGE_TAG      = "${BUILD_NUMBER}"
 
         ECR_URL        = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
