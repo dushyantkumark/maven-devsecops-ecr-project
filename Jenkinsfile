@@ -43,16 +43,16 @@ pipeline {
         stage("Publish Artifact to JFrog") {
             steps {
                 withCredentials([string(credentialsId: 'jfrog-api-key', variable: 'JFROG_API_KEY')]) {
-                    sh """
-                        ${JFROG_CLI}/jfrog config add ${JFROG_SERVER} \
-                        --url=${JFROG_URL} \
-                        --apikey=${JFROG_API_KEY} \
+                    sh '''
+                        $JFROG_CLI/jf config add $JFROG_SERVER \
+                        --url=$JFROG_URL \
+                        --access-token=$JFROG_API_KEY \
                         --interactive=false
 
-                        ${JFROG_CLI}/jfrog rt upload "target/*.jar" \
-                        ${JFROG_MAVEN_REPO}/ \
-                        --server-id=${JFROG_SERVER}
-                    """
+                        $JFROG_CLI/jf rt upload "target/*.war" \
+                        $JFROG_MAVEN_REPO/ \
+                        --server-id=$JFROG_SERVER
+                    '''
                 }
             }
         }
@@ -84,15 +84,13 @@ pipeline {
                     additionalArguments: '--scan .',
                     odcInstallation: 'dp-check'
                 )
-                dependencyCheckPublisher(
-                    pattern: '**/dependency-check-report.xml'
-                )
+                dependencyCheckPublisher(pattern: '**/dependency-check-report.xml')
             }
         }
 
         stage("Trivy FS Scan") {
             steps {
-                sh "trivy fs --severity HIGH,CRITICAL --exit-code 1 ."
+                sh 'trivy fs --severity HIGH,CRITICAL --exit-code 1 .'
             }
         }
 
@@ -123,10 +121,10 @@ pipeline {
                 ]) {
                     script {
 
-                        def JFROG_IMAGE = "yourcompany.jfrog.io/${JFROG_DOCKER_REPO}/${IMAGE_REPO}:${env.TAG}"
+                        def JFROG_IMAGE = "${JFROG_URL.replace('https://','')}/${JFROG_DOCKER_REPO}/${IMAGE_REPO}:${env.TAG}"
 
                         sh """
-                            docker login yourcompany.jfrog.io \
+                            docker login ${JFROG_URL.replace('https://','')} \
                             -u ${JF_USER} -p ${JF_PASS}
 
                             docker tag temp-image:${env.TAG} ${JFROG_IMAGE}
@@ -134,12 +132,12 @@ pipeline {
                         """
 
                         sh """
-                            ${JFROG_CLI}/jfrog rt build-collect-env
-                            ${JFROG_CLI}/jfrog rt build-publish vprofile ${BUILD_NUMBER}
+                            $JFROG_CLI/jf rt build-collect-env
+                            $JFROG_CLI/jf rt build-publish vprofile ${BUILD_NUMBER}
                         """
 
                         sh """
-                            ${JFROG_CLI}/jfrog xr scan vprofile/${BUILD_NUMBER} \
+                            $JFROG_CLI/jf xr scan vprofile/${BUILD_NUMBER} \
                             --server-id=${JFROG_SERVER} \
                             --fail=true
                         """
@@ -153,21 +151,19 @@ pipeline {
                 withCredentials([
                     string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
                     string(credentialsId: 'region', variable: 'AWS_REGION'),
-                    [$class: 'AmazonWebServicesCredentialsBinding',
-                     credentialsId: 'awscred']
+                    [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']
                 ]) {
                     script {
-
                         def ECR_URL = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
                         def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${env.TAG}"
 
                         sh """
                             aws ecr get-login-password --region ${AWS_REGION} \
                             | docker login --username AWS --password-stdin ${ECR_URL}
-                        """
 
-                        sh "docker tag temp-image:${env.TAG} ${FINAL_IMAGE}"
-                        sh "docker push ${FINAL_IMAGE}"
+                            docker tag temp-image:${env.TAG} ${FINAL_IMAGE}
+                            docker push ${FINAL_IMAGE}
+                        """
                     }
                 }
             }
