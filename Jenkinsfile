@@ -13,15 +13,18 @@ pipeline {
 
     environment {
         SCANNER_HOME = tool 'sonar-scanner'
+        JFROG_CLI    = tool 'jfrog-cli'
         IMAGE_REPO   = "profilemappimg"
+        JFROG_SERVER = "jfrog-instance"
+        JFROG_URL    = "https://yourcompany.jfrog.io"
+        JFROG_DOCKER_REPO = "docker-local"
+        JFROG_MAVEN_REPO  = "maven-local"
     }
 
     stages {
 
         stage("Clean Workspace") {
-            steps {
-                cleanWs()
-            }
+            steps { cleanWs() }
         }
 
         stage("Checkout Code") {
@@ -34,6 +37,23 @@ pipeline {
         stage("Build Application") {
             steps {
                 sh 'mvn clean install -DskipTests'
+            }
+        }
+
+        stage("Publish Artifact to JFrog") {
+            steps {
+                withCredentials([string(credentialsId: 'jfrog-api-key', variable: 'JFROG_API_KEY')]) {
+                    sh """
+                        ${JFROG_CLI}/jfrog config add ${JFROG_SERVER} \
+                        --url=${JFROG_URL} \
+                        --apikey=${JFROG_API_KEY} \
+                        --interactive=false
+
+                        ${JFROG_CLI}/jfrog rt upload "target/*.jar" \
+                        ${JFROG_MAVEN_REPO}/ \
+                        --server-id=${JFROG_SERVER}
+                    """
+                }
             }
         }
 
@@ -72,7 +92,7 @@ pipeline {
 
         stage("Trivy FS Scan") {
             steps {
-                sh "trivy fs --severity HIGH,CRITICAL ."
+                sh "trivy fs --severity HIGH,CRITICAL --exit-code 1 ."
             }
         }
 
@@ -88,11 +108,47 @@ pipeline {
 
         stage("Trivy Image Scan") {
             steps {
-                sh "trivy image --severity HIGH,CRITICAL temp-image:${env.TAG}"
+                sh "trivy image --severity HIGH,CRITICAL --exit-code 1 temp-image:${env.TAG}"
             }
         }
 
-        stage("Login, Tag & Push to ECR") {
+        stage("Push Image to JFrog & Xray Scan") {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'jfrog-docker-login',
+                        usernameVariable: 'JF_USER',
+                        passwordVariable: 'JF_PASS'
+                    )
+                ]) {
+                    script {
+
+                        def JFROG_IMAGE = "yourcompany.jfrog.io/${JFROG_DOCKER_REPO}/${IMAGE_REPO}:${env.TAG}"
+
+                        sh """
+                            docker login yourcompany.jfrog.io \
+                            -u ${JF_USER} -p ${JF_PASS}
+
+                            docker tag temp-image:${env.TAG} ${JFROG_IMAGE}
+                            docker push ${JFROG_IMAGE}
+                        """
+
+                        sh """
+                            ${JFROG_CLI}/jfrog rt build-collect-env
+                            ${JFROG_CLI}/jfrog rt build-publish vprofile ${BUILD_NUMBER}
+                        """
+
+                        sh """
+                            ${JFROG_CLI}/jfrog xr scan vprofile/${BUILD_NUMBER} \
+                            --server-id=${JFROG_SERVER} \
+                            --fail=true
+                        """
+                    }
+                }
+            }
+        }
+
+        stage("Push to ECR (After Xray Pass)") {
             steps {
                 withCredentials([
                     string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
@@ -101,6 +157,7 @@ pipeline {
                      credentialsId: 'awscred']
                 ]) {
                     script {
+
                         def ECR_URL = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
                         def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${env.TAG}"
 
@@ -154,8 +211,6 @@ pipeline {
             }
             steps {
                 script {
-                    echo "Running OWASP ZAP Scan..."
-
                     def exitCode = sh(
                         script: '''
                             docker run --rm \
@@ -171,12 +226,8 @@ pipeline {
                         returnStatus: true
                     )
 
-                    echo "ZAP Exit Code: ${exitCode}"
-
                     if (exitCode == 1) {
                         error("High severity vulnerabilities found! Failing build.")
-                    } else {
-                        echo "ZAP completed. Warnings will not fail the pipeline."
                     }
                 }
 
@@ -186,14 +237,8 @@ pipeline {
     }
 
     post {
-        success {
-            echo "✅ Pipeline Completed Successfully"
-        }
-        failure {
-            echo "❌ Pipeline Failed"
-        }
-        always {
-            cleanWs()
-        }
+        success { echo "✅ Pipeline Completed Successfully" }
+        failure { echo "❌ Pipeline Failed" }
+        always { cleanWs() }
     }
 }
