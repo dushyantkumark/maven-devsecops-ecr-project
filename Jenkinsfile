@@ -35,8 +35,8 @@ pipeline {
 
         stage("Checkout Code") {
             steps {
-                git branch: 'main',
-                url: 'https://github.com/harishnshetty/maven-devsecops-ecr-project.git'
+                git branch: 'devsecops',
+                url: 'https://github.com/dushyantkumark/maven-devsecops-ecr-project.git'
             }
         }
 
@@ -61,7 +61,7 @@ pipeline {
 
         stage("Quality Gate") {
             steps {
-                timeout(time: 3, unit: 'MINUTES') {
+                timeout(time: 10, unit: 'MINUTES') {
                     waitForQualityGate abortPipeline: true
                 }
             }
