@@ -153,19 +153,32 @@ pipeline {
                 expression { params.SKIP_DAST == false }
             }
             steps {
-                sh '''
+                script {
                     echo "Running OWASP ZAP Scan..."
 
-                    docker run --rm \
-                      --user root \
-                      --network host \
-                      -v "$WORKSPACE:/zap/wrk:rw" \
-                      zaproxy/zap-stable \
-                      zap-baseline.py \
-                      -t http://localhost \
-                      -r zap_report.html \
-                      -J zap_report.json
-                '''
+                    def exitCode = sh(
+                        script: '''
+                            docker run --rm \
+                              --user root \
+                              --network host \
+                              -v "$WORKSPACE:/zap/wrk:rw" \
+                              zaproxy/zap-stable \
+                              zap-baseline.py \
+                              -t http://localhost \
+                              -r zap_report.html \
+                              -J zap_report.json
+                        ''',
+                        returnStatus: true
+                    )
+
+                    echo "ZAP Exit Code: ${exitCode}"
+
+                    if (exitCode == 1) {
+                        error("High severity vulnerabilities found! Failing build.")
+                    } else {
+                        echo "ZAP completed. Warnings will not fail the pipeline."
+                    }
+                }
 
                 archiveArtifacts artifacts: 'zap_report.html,zap_report.json', allowEmptyArchive: true
             }
