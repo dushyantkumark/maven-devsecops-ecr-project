@@ -19,13 +19,15 @@ pipeline {
     stages {
 
         stage("Clean Workspace") {
-            steps { cleanWs() }
+            steps {
+                cleanWs()
+            }
         }
 
         stage("Checkout Code") {
             steps {
                 git branch: 'devsecops',
-                url: 'https://github.com/dushyantkumark/maven-devsecops-ecr-project.git'
+                    url: 'https://github.com/dushyantkumark/maven-devsecops-ecr-project.git'
             }
         }
 
@@ -39,10 +41,10 @@ pipeline {
             steps {
                 withSonarQubeEnv('sonar-server') {
                     sh """
-                    ${SCANNER_HOME}/bin/sonar-scanner \
-                    -Dsonar.projectKey=vprofile \
-                    -Dsonar.sources=src \
-                    -Dsonar.java.binaries=target/classes
+                        ${SCANNER_HOME}/bin/sonar-scanner \
+                        -Dsonar.projectKey=vprofile \
+                        -Dsonar.sources=src \
+                        -Dsonar.java.binaries=target/classes
                     """
                 }
             }
@@ -103,8 +105,8 @@ pipeline {
                         def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${env.TAG}"
 
                         sh """
-                        aws ecr get-login-password --region ${AWS_REGION} \
-                        | docker login --username AWS --password-stdin ${ECR_URL}
+                            aws ecr get-login-password --region ${AWS_REGION} \
+                            | docker login --username AWS --password-stdin ${ECR_URL}
                         """
 
                         sh "docker tag temp-image:${env.TAG} ${FINAL_IMAGE}"
@@ -127,15 +129,16 @@ pipeline {
                         string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
                         string(credentialsId: 'region', variable: 'AWS_REGION')
                     ]) {
+
                         def ECR_URL = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
                         def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${env.TAG}"
 
                         sh '''
-                        EXISTING=$(docker ps -q --filter "publish=80")
-                        if [ -n "$EXISTING" ]; then
-                            docker stop $EXISTING
-                            docker rm $EXISTING
-                        fi
+                            EXISTING=$(docker ps -q --filter "publish=80")
+                            if [ -n "$EXISTING" ]; then
+                                docker stop $EXISTING
+                                docker rm $EXISTING
+                            fi
                         '''
 
                         sh "docker run -d --name vprofile -p 80:8080 ${FINAL_IMAGE}"
@@ -151,14 +154,19 @@ pipeline {
             }
             steps {
                 sh '''
-                docker run --rm --network host \
-                  -v "$WORKSPACE:/zap/wrk:rw" \
-                  zaproxy/zap-stable \
-                  zap-baseline.py \
-                  -t http://localhost \
-                  -r zap_report.html \
-                  -J zap_report.json
+                    echo "Running OWASP ZAP Scan..."
+
+                    docker run --rm \
+                      --user root \
+                      --network host \
+                      -v "$WORKSPACE:/zap/wrk:rw" \
+                      zaproxy/zap-stable \
+                      zap-baseline.py \
+                      -t http://localhost \
+                      -r zap_report.html \
+                      -J zap_report.json
                 '''
+
                 archiveArtifacts artifacts: 'zap_report.html,zap_report.json', allowEmptyArchive: true
             }
         }
