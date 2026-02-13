@@ -39,11 +39,12 @@ pipeline {
             }
         }
 
-        // ================= JFROG UPLOAD (WAR ONLY) =================
+        // ================= JFROG WAR UPLOAD =================
 
         stage("Publish Artifact to JFrog") {
             steps {
                 sh """
+                    ${JFROG_CLI}/jf rt ping --server-id=${JFROG_SERVER}
                     ${JFROG_CLI}/jf rt upload \
                     "target/*.war" \
                     maven-local/ \
@@ -87,7 +88,7 @@ pipeline {
             }
         }
 
-        // ================= TRIVY =================
+        // ================= TRIVY FS =================
 
         stage("Trivy FS Scan") {
             steps {
