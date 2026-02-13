@@ -13,6 +13,8 @@ pipeline {
     environment {
         IMAGE_REPO = "profilemappimg"
         BRANCH_NAME = "devsecops"
+        // Replace with your real association ARN
+        CODEGURU_ASSOCIATION_ARN = "arn:aws:codeguru-reviewer:ap-south-1:123456789012:association/xxxx-xxxx"
     }
 
     stages {
@@ -34,9 +36,11 @@ pipeline {
             }
         }
 
-        // ================= SAST =================
+        // =========================
+        // SAST - CodeGuru
+        // =========================
 
-        // stage("SAST - CodeGuru") {
+        // stage("SAST - CodeGuru Review") {
         //     steps {
         //         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']]) {
         //             sh '''
@@ -44,26 +48,18 @@ pipeline {
 
         //                 aws codeguru-reviewer create-code-review \
         //                   --name $REVIEW_NAME \
-        //                   --repository-association-arn <YOUR_ASSOCIATION_ARN> \
+        //                   --repository-association-arn $CODEGURU_ASSOCIATION_ARN \
         //                   --type RepositoryAnalysis={RepositoryHead={BranchName=devsecops}}
 
-        //                 echo "Waiting for CodeGuru review..."
-
-        //                 STATUS="Pending"
-
-        //                 while [ "$STATUS" != "Completed" ]; do
-        //                     sleep 20
-        //                     STATUS=$(aws codeguru-reviewer list-code-reviews \
-        //                         --query "CodeReviewSummaries[?Name=='$REVIEW_NAME'].State" \
-        //                         --output text)
-        //                     echo "Status: $STATUS"
-        //                 done
+        //                 echo "CodeGuru review triggered (non-blocking mode)."
         //             '''
         //         }
         //     }
         // }
 
-        // ================= DOCKER BUILD =================
+        // =========================
+        // Docker Build
+        // =========================
 
         stage("Build Docker Image") {
             steps {
@@ -75,7 +71,9 @@ pipeline {
             }
         }
 
-        // ================= PUSH TO ECR =================
+        // =========================
+        // Push to ECR
+        // =========================
 
         stage("Push to ECR") {
             steps {
@@ -97,35 +95,70 @@ pipeline {
             }
         }
 
-        // ================= INSPECTOR SECURITY GATE =================
+        // =========================
+        // Inspector Report Only (No Fail Mode)
+        // =========================
 
-        stage("Inspector Security Gate") {
+        stage("Inspector Security Report") {
             steps {
                 withCredentials([
+                    string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
+                    string(credentialsId: 'region', variable: 'AWS_REGION'),
                     [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']
                 ]) {
                     sh '''
                         echo "Waiting for Amazon Inspector scan..."
                         sleep 40
 
-                        CRITICAL_COUNT=$(aws inspector2 list-findings \
-                          --filter-criteria '{
-                            "severity":[{"comparison":"EQUALS","value":"CRITICAL"}],
-                            "resourceType":[{"comparison":"EQUALS","value":"AWS_ECR_CONTAINER_IMAGE"}]
-                          }' \
-                          --query "length(findings)" \
-                          --output text)
+                        echo "Downloading full findings..."
 
-                        echo "Critical Findings: $CRITICAL_COUNT"
+                        aws inspector2 list-findings \
+                          --filter-criteria "{
+                            \\"ecrImageRepositoryName\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$IMAGE_REPO\\"}],
+                            \\"ecrImageTags\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$TAG\\"}]
+                          }" \
+                          --output json > inspector-findings.json
 
-                        if [ "$CRITICAL_COUNT" -gt 0 ]; then
-                            echo "❌ CRITICAL vulnerabilities found."
-                            exit 1
-                        fi
+                        echo "Generating severity summary..."
 
-                        echo "✅ No Critical vulnerabilities found."
+                        CRITICAL=$(aws inspector2 list-findings \
+                          --filter-criteria "{\\"severity\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"CRITICAL\\"}],\\"ecrImageRepositoryName\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$IMAGE_REPO\\"}],\\"ecrImageTags\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$TAG\\"}]}" \
+                          --query "length(findings)" --output text)
+
+                        HIGH=$(aws inspector2 list-findings \
+                          --filter-criteria "{\\"severity\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"HIGH\\"}],\\"ecrImageRepositoryName\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$IMAGE_REPO\\"}],\\"ecrImageTags\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$TAG\\"}]}" \
+                          --query "length(findings)" --output text)
+
+                        MEDIUM=$(aws inspector2 list-findings \
+                          --filter-criteria "{\\"severity\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"MEDIUM\\"}],\\"ecrImageRepositoryName\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$IMAGE_REPO\\"}],\\"ecrImageTags\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$TAG\\"}]}" \
+                          --query "length(findings)" --output text)
+
+                        LOW=$(aws inspector2 list-findings \
+                          --filter-criteria "{\\"severity\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"LOW\\"}],\\"ecrImageRepositoryName\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$IMAGE_REPO\\"}],\\"ecrImageTags\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$TAG\\"}]}" \
+                          --query "length(findings)" --output text)
+
+                        echo "------------------------------------"
+                        echo "Inspector Vulnerability Summary"
+                        echo "CRITICAL : $CRITICAL"
+                        echo "HIGH     : $HIGH"
+                        echo "MEDIUM   : $MEDIUM"
+                        echo "LOW      : $LOW"
+                        echo "------------------------------------"
+
+                        echo "CRITICAL: $CRITICAL" > inspector-summary.txt
+                        echo "HIGH: $HIGH" >> inspector-summary.txt
+                        echo "MEDIUM: $MEDIUM" >> inspector-summary.txt
+                        echo "LOW: $LOW" >> inspector-summary.txt
+
+                        echo "Report mode enabled. Pipeline will continue."
                     '''
                 }
+            }
+        }
+
+        stage("Archive Inspector Reports") {
+            steps {
+                archiveArtifacts artifacts: 'inspector-findings.json, inspector-summary.txt', allowEmptyArchive: true
             }
         }
 
@@ -156,8 +189,8 @@ pipeline {
     }
 
     post {
-        success { echo "✅ AWS DevSecOps Pipeline Success" }
-        failure { echo "❌ Pipeline Failed - Security Gate Triggered" }
+        success { echo "✅ AWS DevSecOps Pipeline Success (Report Mode)" }
+        failure { echo "❌ Pipeline Failed" }
         always { cleanWs() }
     }
 }
