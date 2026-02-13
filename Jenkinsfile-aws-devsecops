@@ -36,6 +36,7 @@ pipeline {
             }
         }
 
+        // 🔥 FIXED DOCKER BUILD (Inspector Compatible)
         stage("Build Docker Image") {
             steps {
                 script {
@@ -45,7 +46,9 @@ pipeline {
                         docker buildx build \
                           --platform linux/amd64 \
                           --provenance=false \
-                          --output type=docker \
+                          --sbom=false \
+                          --attest=type=none \
+                          --load \
                           -t temp-image:${TAG} .
                     '''
                 }
@@ -100,16 +103,10 @@ pipeline {
                         FILTER=$(cat <<EOF
 {
   "ecrRepositoryName": [
-    {
-      "comparison": "EQUALS",
-      "value": "$IMAGE_REPO"
-    }
+    { "comparison": "EQUALS", "value": "$IMAGE_REPO" }
   ],
   "ecrImageTags": [
-    {
-      "comparison": "EQUALS",
-      "value": "$TAG"
-    }
+    { "comparison": "EQUALS", "value": "$TAG" }
   ]
 }
 EOF
@@ -149,16 +146,10 @@ EOF
                         FINDINGS_FILTER=$(cat <<EOF
 {
   "ecrImageRepositoryName": [
-    {
-      "comparison": "EQUALS",
-      "value": "$IMAGE_REPO"
-    }
+    { "comparison": "EQUALS", "value": "$IMAGE_REPO" }
   ],
   "ecrImageHash": [
-    {
-      "comparison": "EQUALS",
-      "value": "$DIGEST"
-    }
+    { "comparison": "EQUALS", "value": "$DIGEST" }
   ]
 }
 EOF
