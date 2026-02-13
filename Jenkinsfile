@@ -15,9 +15,7 @@ pipeline {
         SCANNER_HOME = tool 'sonar-scanner'
         JFROG_CLI    = tool 'jfrog-cli'
         IMAGE_REPO   = "profilemappimg"
-        JFROG_SERVER = "jfrog-instance"
-        JFROG_DOCKER_REPO = "docker-local"
-        JFROG_MAVEN_REPO  = "maven-local"
+        JFROG_SERVER = "jfrog-artifactory"
     }
 
     stages {
@@ -46,9 +44,10 @@ pipeline {
         stage("Publish Artifact to JFrog") {
             steps {
                 sh '''
-                    $JFROG_CLI/jf rt upload "target/*.war" \
+                    $JFROG_CLI/jf rt upload \
+                    "target/*.war" \
                     maven-local/ \
-                    --server-id=jfrog-instance
+                    --server-id=jfrog-artifactory
                 '''
             }
         }
@@ -96,6 +95,8 @@ pipeline {
             }
         }
 
+        // ---------------- DOCKER BUILD ----------------
+
         stage("Build Docker Image") {
             steps {
                 script {
@@ -109,23 +110,6 @@ pipeline {
         stage("Trivy Image Scan") {
             steps {
                 sh "trivy image --severity HIGH,CRITICAL --exit-code 1 temp-image:${env.TAG}"
-            }
-        }
-
-        // ---------------- PUSH DOCKER TO JFROG ----------------
-
-        stage("Push Image to JFrog") {
-            steps {
-                script {
-                    def JFROG_HOST = "3.110.216.190:8082"
-                    def JFROG_IMAGE = "${JFROG_HOST}/${JFROG_DOCKER_REPO}/${IMAGE_REPO}:${env.TAG}"
-
-                    sh """
-                        docker login ${JFROG_HOST} -u admin -p <YOUR_API_KEY>
-                        docker tag temp-image:${env.TAG} ${JFROG_IMAGE}
-                        docker push ${JFROG_IMAGE}
-                    """
-                }
             }
         }
 
