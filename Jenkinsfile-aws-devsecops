@@ -46,17 +46,6 @@ pipeline {
             }
         }
 
-        // 🔥 IMPORTANT FIX: Convert OCI → Docker v2
-        stage("Convert Image Format (Inspector Fix)") {
-            steps {
-                sh """
-                    docker save temp-image:${env.TAG} -o image.tar
-                    docker load -i image.tar
-                    rm -f image.tar
-                """
-            }
-        }
-
         stage("Push to ECR") {
             steps {
                 withCredentials([
@@ -64,17 +53,32 @@ pipeline {
                     string(credentialsId: 'region', variable: 'AWS_REGION'),
                     [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']
                 ]) {
-                    sh '''
-                        set -e
+                    script {
+                        sh """
+                            ECR_URL=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
-                        ECR_URL=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+                            aws ecr get-login-password --region $AWS_REGION \
+                            | docker login --username AWS --password-stdin $ECR_URL
 
-                        aws ecr get-login-password --region $AWS_REGION \
-                        | docker login --username AWS --password-stdin $ECR_URL
+                            docker tag temp-image:${TAG} $ECR_URL/${IMAGE_REPO}:${TAG}
+                            docker push $ECR_URL/${IMAGE_REPO}:${TAG}
+                        """
 
-                        docker tag temp-image:$TAG $ECR_URL/$IMAGE_REPO:$TAG
-                        docker push $ECR_URL/$IMAGE_REPO:$TAG
-                    '''
+                        // 🔥 Extract image digest from ECR
+                        env.DIGEST = sh(
+                            script: """
+                            aws ecr describe-images \
+                              --repository-name ${IMAGE_REPO} \
+                              --image-ids imageTag=${TAG} \
+                              --query 'imageDetails[0].imageDigest' \
+                              --output text \
+                              --region ${AWS_REGION}
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        echo "Image Digest: ${env.DIGEST}"
+                    }
                 }
             }
         }
@@ -84,28 +88,28 @@ pipeline {
                 withCredentials([
                     string(credentialsId: 'region', variable: 'AWS_REGION')
                 ]) {
-                    sh '''
-                        echo "Waiting for Inspector scan..."
+                    sh """
+                        echo "Waiting for Inspector scan on digest: ${DIGEST}"
 
                         for i in {1..40}
                         do
-                          STATUS=$(aws inspector2 list-coverage \
-                            --filter-criteria "{
-                              \\"ecrRepositoryName\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$IMAGE_REPO\\"}],
-                              \\"ecrImageTags\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$TAG\\"}]
-                            }" \
-                            --region $AWS_REGION \
-                            --query "coveredResources[0].scanStatus.statusCode" \
+                          STATUS=\$(aws inspector2 list-coverage \
+                            --filter-criteria '{
+                              "ecrImageRepositoryName":[{"comparison":"EQUALS","value":"${IMAGE_REPO}"}],
+                              "ecrImageHash":[{"comparison":"EQUALS","value":"${DIGEST}"}]
+                            }' \
+                            --region ${AWS_REGION} \
+                            --query 'coveredResources[0].scanStatus.statusCode' \
                             --output text)
 
-                          echo "Scan Status: $STATUS"
+                          echo "Scan Status: \$STATUS"
 
-                          if [ "$STATUS" = "ACTIVE" ]; then
+                          if [ "\$STATUS" = "ACTIVE" ]; then
                             echo "Scan completed."
                             break
                           fi
 
-                          if [ "$STATUS" = "FAILED" ]; then
+                          if [ "\$STATUS" = "FAILED" ]; then
                             echo "Scan failed."
                             exit 1
                           fi
@@ -113,34 +117,34 @@ pipeline {
                           sleep 20
                         done
 
-                        if [ "$STATUS" != "ACTIVE" ]; then
+                        if [ "\$STATUS" != "ACTIVE" ]; then
                           echo "Scan did not complete in time."
                           exit 1
                         fi
-                    '''
+                    """
                 }
             }
         }
 
-        stage("Inspector Security Report (HTML)") {
+        stage("Fetch Inspector Findings") {
             steps {
                 withCredentials([
                     string(credentialsId: 'region', variable: 'AWS_REGION')
                 ]) {
-                    sh '''
+                    sh """
                         aws inspector2 list-findings \
-                          --filter-criteria "{
-                            \\"ecrImageRepositoryName\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$IMAGE_REPO\\"}],
-                            \\"ecrImageTags\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$TAG\\"}]
-                          }" \
-                          --region $AWS_REGION \
+                          --filter-criteria '{
+                            "ecrImageRepositoryName":[{"comparison":"EQUALS","value":"${IMAGE_REPO}"}],
+                            "ecrImageHash":[{"comparison":"EQUALS","value":"${DIGEST}"}]
+                          }' \
+                          --region ${AWS_REGION} \
                           --output json > inspector-findings.json
-                    '''
+                    """
                 }
             }
         }
 
-        stage("Archive Inspector Reports") {
+        stage("Archive Inspector Report") {
             steps {
                 archiveArtifacts artifacts: 'inspector-findings.json', allowEmptyArchive: true
             }
@@ -158,22 +162,22 @@ pipeline {
                     string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
                     string(credentialsId: 'region', variable: 'AWS_REGION')
                 ]) {
-                    sh '''
+                    sh """
                         ECR_URL=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
                         IMAGE=$ECR_URL/$IMAGE_REPO:$TAG
 
                         docker stop vprofile || true
                         docker rm vprofile || true
 
-                        docker run -d --name vprofile -p 80:8080 $IMAGE
-                    '''
+                        docker run -d --name vprofile -p 80:8080 \$IMAGE
+                    """
                 }
             }
         }
     }
 
     post {
-        success { echo "Pipeline Success (Inspector Working Mode)" }
+        success { echo "Pipeline Success (Inspector Digest Mode)" }
         failure { echo "Pipeline Failed" }
         always { cleanWs() }
     }
