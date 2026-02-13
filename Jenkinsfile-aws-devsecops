@@ -13,7 +13,6 @@ pipeline {
     environment {
         IMAGE_REPO = "profilemappimg"
         BRANCH_NAME = "devsecops"
-        // Replace with your real association ARN
         CODEGURU_ASSOCIATION_ARN = "arn:aws:codeguru-reviewer:ap-south-1:123456789012:association/xxxx-xxxx"
     }
 
@@ -36,31 +35,6 @@ pipeline {
             }
         }
 
-        // =========================
-        // SAST - CodeGuru
-        // =========================
-
-        // stage("SAST - CodeGuru Review") {
-        //     steps {
-        //         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']]) {
-        //             sh '''
-        //                 REVIEW_NAME="vprofile-review-$BUILD_NUMBER"
-
-        //                 aws codeguru-reviewer create-code-review \
-        //                   --name $REVIEW_NAME \
-        //                   --repository-association-arn $CODEGURU_ASSOCIATION_ARN \
-        //                   --type RepositoryAnalysis={RepositoryHead={BranchName=devsecops}}
-
-        //                 echo "CodeGuru review triggered (non-blocking mode)."
-        //             '''
-        //         }
-        //     }
-        // }
-
-        // =========================
-        // Docker Build
-        // =========================
-
         stage("Build Docker Image") {
             steps {
                 script {
@@ -70,10 +44,6 @@ pipeline {
                 }
             }
         }
-
-        // =========================
-        // Push to ECR
-        // =========================
 
         stage("Push to ECR") {
             steps {
@@ -96,10 +66,10 @@ pipeline {
         }
 
         // =========================
-        // Inspector Report Only (No Fail Mode)
+        // Inspector HTML Report
         // =========================
 
-        stage("Inspector Security Report") {
+        stage("Inspector Security Report (HTML)") {
             steps {
                 withCredentials([
                     string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
@@ -110,47 +80,66 @@ pipeline {
                         echo "Waiting for Amazon Inspector scan..."
                         sleep 40
 
-                        echo "Downloading full findings..."
+                        echo "Fetching findings..."
 
                         aws inspector2 list-findings \
                           --filter-criteria "{
                             \\"ecrImageRepositoryName\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$IMAGE_REPO\\"}],
                             \\"ecrImageTags\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$TAG\\"}]
                           }" \
+                          --region $AWS_REGION \
                           --output json > inspector-findings.json
 
-                        echo "Generating severity summary..."
+                        echo "Parsing severity counts..."
 
-                        CRITICAL=$(aws inspector2 list-findings \
-                          --filter-criteria "{\\"severity\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"CRITICAL\\"}],\\"ecrImageRepositoryName\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$IMAGE_REPO\\"}],\\"ecrImageTags\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$TAG\\"}]}" \
-                          --query "length(findings)" --output text)
+                        CRITICAL=$(jq '[.findings[] | select(.severity=="CRITICAL")] | length' inspector-findings.json)
+                        HIGH=$(jq '[.findings[] | select(.severity=="HIGH")] | length' inspector-findings.json)
+                        MEDIUM=$(jq '[.findings[] | select(.severity=="MEDIUM")] | length' inspector-findings.json)
+                        LOW=$(jq '[.findings[] | select(.severity=="LOW")] | length' inspector-findings.json)
+                        TOTAL=$(jq '.findings | length' inspector-findings.json)
 
-                        HIGH=$(aws inspector2 list-findings \
-                          --filter-criteria "{\\"severity\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"HIGH\\"}],\\"ecrImageRepositoryName\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$IMAGE_REPO\\"}],\\"ecrImageTags\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$TAG\\"}]}" \
-                          --query "length(findings)" --output text)
+                        echo "Generating HTML report..."
 
-                        MEDIUM=$(aws inspector2 list-findings \
-                          --filter-criteria "{\\"severity\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"MEDIUM\\"}],\\"ecrImageRepositoryName\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$IMAGE_REPO\\"}],\\"ecrImageTags\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$TAG\\"}]}" \
-                          --query "length(findings)" --output text)
+                        cat <<EOF > inspector-report.html
+<html>
+<head>
+<title>Amazon Inspector Report</title>
+<style>
+body { font-family: Arial; background:#f4f6f9; }
+h2 { color:#232f3e; }
+table { border-collapse: collapse; width: 70%; background:white; }
+th, td { border: 1px solid #ddd; padding: 10px; text-align: center; }
+th { background-color: #232f3e; color: white; }
+.critical { background-color: #d9534f; color: white; font-weight:bold; }
+.high { background-color: #f0ad4e; color: white; font-weight:bold; }
+.medium { background-color: #ffd966; font-weight:bold; }
+.low { background-color: #5bc0de; color:white; font-weight:bold; }
+.total { background-color:#5cb85c; color:white; font-weight:bold; }
+</style>
+</head>
+<body>
+<h2>Amazon Inspector Vulnerability Summary</h2>
+<table>
+<tr>
+<th>Total</th>
+<th>Critical</th>
+<th>High</th>
+<th>Medium</th>
+<th>Low</th>
+</tr>
+<tr>
+<td class="total">$TOTAL</td>
+<td class="critical">$CRITICAL</td>
+<td class="high">$HIGH</td>
+<td class="medium">$MEDIUM</td>
+<td class="low">$LOW</td>
+</tr>
+</table>
+</body>
+</html>
+EOF
 
-                        LOW=$(aws inspector2 list-findings \
-                          --filter-criteria "{\\"severity\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"LOW\\"}],\\"ecrImageRepositoryName\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$IMAGE_REPO\\"}],\\"ecrImageTags\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$TAG\\"}]}" \
-                          --query "length(findings)" --output text)
-
-                        echo "------------------------------------"
-                        echo "Inspector Vulnerability Summary"
-                        echo "CRITICAL : $CRITICAL"
-                        echo "HIGH     : $HIGH"
-                        echo "MEDIUM   : $MEDIUM"
-                        echo "LOW      : $LOW"
-                        echo "------------------------------------"
-
-                        echo "CRITICAL: $CRITICAL" > inspector-summary.txt
-                        echo "HIGH: $HIGH" >> inspector-summary.txt
-                        echo "MEDIUM: $MEDIUM" >> inspector-summary.txt
-                        echo "LOW: $LOW" >> inspector-summary.txt
-
-                        echo "Report mode enabled. Pipeline will continue."
+                        echo "HTML report generated successfully."
                     '''
                 }
             }
@@ -158,7 +147,7 @@ pipeline {
 
         stage("Archive Inspector Reports") {
             steps {
-                archiveArtifacts artifacts: 'inspector-findings.json, inspector-summary.txt', allowEmptyArchive: true
+                archiveArtifacts artifacts: 'inspector-findings.json, inspector-report.html', allowEmptyArchive: true
             }
         }
 
@@ -189,7 +178,7 @@ pipeline {
     }
 
     post {
-        success { echo "✅ AWS DevSecOps Pipeline Success (Report Mode)" }
+        success { echo "✅ AWS DevSecOps Pipeline Success (HTML Report Mode)" }
         failure { echo "❌ Pipeline Failed" }
         always { cleanWs() }
     }
