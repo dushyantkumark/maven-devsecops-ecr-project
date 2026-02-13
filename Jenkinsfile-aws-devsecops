@@ -13,7 +13,6 @@ pipeline {
     environment {
         IMAGE_REPO = "profilemappimg"
         BRANCH_NAME = "devsecops"
-        CODEGURU_ASSOCIATION_ARN = "arn:aws:codeguru-reviewer:ap-south-1:123456789012:association/xxxx-xxxx"
     }
 
     stages {
@@ -35,12 +34,18 @@ pipeline {
             }
         }
 
-        stage("Build Docker Image") {
+        stage("Build Docker Image (amd64 only)") {
             steps {
                 script {
                     def tag = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG : env.BUILD_NUMBER
                     env.TAG = tag
-                    sh "docker build -t temp-image:${env.TAG} ."
+
+                    sh """
+                        docker buildx build \
+                          --platform linux/amd64 \
+                          --load \
+                          -t temp-image:${env.TAG} .
+                    """
                 }
             }
         }
@@ -65,21 +70,45 @@ pipeline {
             }
         }
 
-        // =========================
-        // Inspector HTML Report
-        // =========================
+        stage("Wait For Inspector Scan") {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'region', variable: 'AWS_REGION')
+                ]) {
+                    sh '''
+                        echo "Waiting for Inspector scan to complete..."
+
+                        for i in {1..20}
+                        do
+                          STATUS=$(aws inspector2 list-coverage \
+                            --filter-criteria "{
+                              \\"ecrRepositoryName\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$IMAGE_REPO\\"}],
+                              \\"ecrImageTags\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$TAG\\"}]
+                            }" \
+                            --region $AWS_REGION \
+                            --query "coveredResources[0].scanStatus.statusCode" \
+                            --output text)
+
+                          echo "Current Scan Status: $STATUS"
+
+                          if [ "$STATUS" = "ACTIVE" ]; then
+                            echo "Scan completed."
+                            break
+                          fi
+
+                          sleep 15
+                        done
+                    '''
+                }
+            }
+        }
 
         stage("Inspector Security Report (HTML)") {
             steps {
                 withCredentials([
-                    string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
-                    string(credentialsId: 'region', variable: 'AWS_REGION'),
-                    [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']
+                    string(credentialsId: 'region', variable: 'AWS_REGION')
                 ]) {
                     sh '''
-                        echo "Waiting for Amazon Inspector scan..."
-                        sleep 40
-
                         echo "Fetching findings..."
 
                         aws inspector2 list-findings \
@@ -90,15 +119,11 @@ pipeline {
                           --region $AWS_REGION \
                           --output json > inspector-findings.json
 
-                        echo "Parsing severity counts..."
-
                         CRITICAL=$(jq '[.findings[] | select(.severity=="CRITICAL")] | length' inspector-findings.json)
                         HIGH=$(jq '[.findings[] | select(.severity=="HIGH")] | length' inspector-findings.json)
                         MEDIUM=$(jq '[.findings[] | select(.severity=="MEDIUM")] | length' inspector-findings.json)
                         LOW=$(jq '[.findings[] | select(.severity=="LOW")] | length' inspector-findings.json)
                         TOTAL=$(jq '.findings | length' inspector-findings.json)
-
-                        echo "Generating HTML report..."
 
                         cat <<EOF > inspector-report.html
 <html>
@@ -178,7 +203,7 @@ EOF
     }
 
     post {
-        success { echo "✅ AWS DevSecOps Pipeline Success (HTML Report Mode)" }
+        success { echo "✅ AWS DevSecOps Pipeline Success (Inspector Active Mode)" }
         failure { echo "❌ Pipeline Failed" }
         always { cleanWs() }
     }
