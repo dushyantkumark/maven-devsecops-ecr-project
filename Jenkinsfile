@@ -110,7 +110,8 @@ pipeline {
 
                     trivy fs \
                       --severity MEDIUM,HIGH,CRITICAL \
-                      --format html \
+                      --format template \
+                      --template "@/usr/local/share/trivy/templates/html.tpl" \
                       --output trivy-fs-report.html \
                       . || true
                 '''
@@ -138,7 +139,8 @@ pipeline {
 
                     trivy image \
                       --severity MEDIUM,HIGH,CRITICAL \
-                      --format html \
+                      --format template \
+                      --template "@/usr/local/share/trivy/templates/html.tpl" \
                       --output trivy-image-report.html \
                       temp-image:$TAG || true
                 '''
