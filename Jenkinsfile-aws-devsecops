@@ -38,10 +38,7 @@ pipeline {
             steps {
                 script {
                     env.TAG = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG : env.BUILD_NUMBER
-
-                    sh """
-                        docker build -t temp-image:${env.TAG} .
-                    """
+                    sh "docker build -t temp-image:${env.TAG} ."
                 }
             }
         }
@@ -58,14 +55,13 @@ pipeline {
                         sh """
                             ECR_URL=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
 
-                            aws ecr get-login-password --region ${AWS_REGION} \
+                            aws ecr get-login-password --region "${AWS_REGION}" \
                             | docker login --username AWS --password-stdin \$ECR_URL
 
                             docker tag temp-image:${TAG} \$ECR_URL/${IMAGE_REPO}:${TAG}
                             docker push \$ECR_URL/${IMAGE_REPO}:${TAG}
                         """
 
-                        // 🔥 Extract Image Digest (CRITICAL)
                         env.DIGEST = sh(
                             script: """
                                 aws ecr describe-images \
@@ -73,7 +69,7 @@ pipeline {
                                   --image-ids imageTag=${TAG} \
                                   --query 'imageDetails[0].imageDigest' \
                                   --output text \
-                                  --region ${AWS_REGION}
+                                  --region "${AWS_REGION}"
                             """,
                             returnStdout: true
                         ).trim()
@@ -89,40 +85,33 @@ pipeline {
                 withCredentials([
                     string(credentialsId: 'region', variable: 'AWS_REGION')
                 ]) {
-                    sh """
-                        echo "Waiting for Inspector scan on digest: ${DIGEST}"
+                    sh '''
+                        echo "Waiting for Inspector scan..."
 
                         for i in {1..40}
                         do
-                          STATUS=\$(aws inspector2 list-coverage \
-                            --filter-criteria '{
-                              "ecrImageRepositoryName":[{"comparison":"EQUALS","value":"${IMAGE_REPO}"}],
-                              "ecrImageHash":[{"comparison":"EQUALS","value":"${DIGEST}"}]
-                            }' \
-                            --region ${AWS_REGION} \
-                            --query 'coveredResources[0].scanStatus.statusCode' \
+                          STATUS=$(aws inspector2 list-coverage \
+                            --filter-criteria "{
+                              \"ecrRepositoryName\":[{\"comparison\":\"EQUALS\",\"value\":\"$IMAGE_REPO\"}],
+                              \"ecrImageTags\":[{\"comparison\":\"EQUALS\",\"value\":\"$TAG\"}]
+                            }" \
+                            --region "$AWS_REGION" \
+                            --query "coveredResources[0].scanStatus.statusCode" \
                             --output text)
 
-                          echo "Scan Status: \$STATUS"
+                          echo "Scan Status: $STATUS"
 
-                          if [ "\$STATUS" = "ACTIVE" ]; then
+                          if [ "$STATUS" = "ACTIVE" ]; then
                             echo "Scan completed."
-                            break
-                          fi
-
-                          if [ "\$STATUS" = "FAILED" ]; then
-                            echo "Scan failed."
-                            exit 1
+                            exit 0
                           fi
 
                           sleep 20
                         done
 
-                        if [ "\$STATUS" != "ACTIVE" ]; then
-                          echo "Scan did not complete in time."
-                          exit 1
-                        fi
-                    """
+                        echo "Scan did not complete in time."
+                        exit 1
+                    '''
                 }
             }
         }
@@ -138,7 +127,7 @@ pipeline {
                             "ecrImageRepositoryName":[{"comparison":"EQUALS","value":"${IMAGE_REPO}"}],
                             "ecrImageHash":[{"comparison":"EQUALS","value":"${DIGEST}"}]
                           }' \
-                          --region ${AWS_REGION} \
+                          --region "${AWS_REGION}" \
                           --output json > inspector-findings.json
                     """
                 }
