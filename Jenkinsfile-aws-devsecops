@@ -36,7 +36,7 @@ pipeline {
             }
         }
 
-        // 🔥 FIXED DOCKER BUILD (Inspector Compatible)
+        // 🔥 Docker Build (Inspector Compatible)
         stage("Build Docker Image") {
             steps {
                 script {
@@ -47,7 +47,6 @@ pipeline {
                           --platform linux/amd64 \
                           --provenance=false \
                           --sbom=false \
-                          --attest=type=none \
                           --load \
                           -t temp-image:${TAG} .
                     '''
