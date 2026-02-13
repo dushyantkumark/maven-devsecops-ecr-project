@@ -85,20 +85,13 @@ pipeline {
                     sh '''
                         echo "Waiting for Inspector scan..."
 
-                        cat > filter.json <<EOF
-{
-  "ecrRepositoryName": [{"comparison": "EQUALS", "value": "$IMAGE_REPO"}],
-  "ecrImageTags": [{"comparison": "EQUALS", "value": "$TAG"}]
-}
-EOF
-
                         for i in $(seq 1 40)
                         do
                           STATUS=$(aws inspector2 list-coverage \
-                            --filter-criteria file://filter.json \
+                            --filter-criteria "{\"ecrRepositoryName\":[{\"comparison\":\"EQUALS\",\"value\":\"$IMAGE_REPO\"}],\"ecrImageTags\":[{\"comparison\":\"EQUALS\",\"value\":\"$TAG\"}]}" \
                             --region "$AWS_REGION" \
-                            --query "coveredResources[0].scanStatus.statusCode" \
-                            --output text)
+                            --query "coveredResources[].scanStatus.statusCode" \
+                            --output text | head -n 1)
 
                           echo "Scan Status: $STATUS"
 
@@ -123,15 +116,8 @@ EOF
                     string(credentialsId: 'region', variable: 'AWS_REGION')
                 ]) {
                     sh '''
-                        cat > findings-filter.json <<EOF
-{
-  "ecrRepositoryName": [{"comparison": "EQUALS", "value": "$IMAGE_REPO"}],
-  "ecrImageTags": [{"comparison": "EQUALS", "value": "$TAG"}]
-}
-EOF
-
                         aws inspector2 list-findings \
-                          --filter-criteria file://findings-filter.json \
+                          --filter-criteria "{\"ecrRepositoryName\":[{\"comparison\":\"EQUALS\",\"value\":\"$IMAGE_REPO\"}],\"ecrImageTags\":[{\"comparison\":\"EQUALS\",\"value\":\"$TAG\"}]}" \
                           --region "$AWS_REGION" \
                           --output json > inspector-findings.json
                     '''
@@ -174,6 +160,6 @@ EOF
     post {
         success { echo "Pipeline Success (Inspector Working)" }
         failure { echo "Pipeline Failed" }
-        always { cleanWs() }
+        always  { cleanWs() }
     }
 }
