@@ -18,7 +18,9 @@ pipeline {
     stages {
 
         stage("Clean Workspace") {
-            steps { cleanWs() }
+            steps {
+                cleanWs()
+            }
         }
 
         stage("Checkout Code") {
@@ -52,25 +54,25 @@ pipeline {
                 ]) {
                     script {
 
-                        sh """
+                        sh '''
                             ECR_URL=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
 
-                            aws ecr get-login-password --region "${AWS_REGION}" \
-                            | docker login --username AWS --password-stdin \$ECR_URL
+                            aws ecr get-login-password --region "$AWS_REGION" \
+                            | docker login --username AWS --password-stdin "$ECR_URL"
 
-                            docker tag temp-image:${TAG} \$ECR_URL/${IMAGE_REPO}:${TAG}
-                            docker push \$ECR_URL/${IMAGE_REPO}:${TAG}
-                        """
+                            docker tag temp-image:${TAG} "$ECR_URL/${IMAGE_REPO}:${TAG}"
+                            docker push "$ECR_URL/${IMAGE_REPO}:${TAG}"
+                        '''
 
                         env.DIGEST = sh(
-                            script: """
+                            script: '''
                                 aws ecr describe-images \
-                                  --repository-name ${IMAGE_REPO} \
-                                  --image-ids imageTag=${TAG} \
+                                  --repository-name "$IMAGE_REPO" \
+                                  --image-ids imageTag="$TAG" \
                                   --query 'imageDetails[0].imageDigest' \
                                   --output text \
-                                  --region "${AWS_REGION}"
-                            """,
+                                  --region "$AWS_REGION"
+                            ''',
                             returnStdout: true
                         ).trim()
 
@@ -91,10 +93,7 @@ pipeline {
                         for i in {1..40}
                         do
                           STATUS=$(aws inspector2 list-coverage \
-                            --filter-criteria "{
-                              \"ecrRepositoryName\":[{\"comparison\":\"EQUALS\",\"value\":\"$IMAGE_REPO\"}],
-                              \"ecrImageTags\":[{\"comparison\":\"EQUALS\",\"value\":\"$TAG\"}]
-                            }" \
+                            --filter-criteria "{\"ecrRepositoryName\":[{\"comparison\":\"EQUALS\",\"value\":\"$IMAGE_REPO\"}],\"ecrImageTags\":[{\"comparison\":\"EQUALS\",\"value\":\"$TAG\"}]}" \
                             --region "$AWS_REGION" \
                             --query "coveredResources[0].scanStatus.statusCode" \
                             --output text)
@@ -121,15 +120,12 @@ pipeline {
                 withCredentials([
                     string(credentialsId: 'region', variable: 'AWS_REGION')
                 ]) {
-                    sh """
+                    sh '''
                         aws inspector2 list-findings \
-                          --filter-criteria '{
-                            "ecrImageRepositoryName":[{"comparison":"EQUALS","value":"${IMAGE_REPO}"}],
-                            "ecrImageHash":[{"comparison":"EQUALS","value":"${DIGEST}"}]
-                          }' \
-                          --region "${AWS_REGION}" \
+                          --filter-criteria "{\"ecrImageRepositoryName\":[{\"comparison\":\"EQUALS\",\"value\":\"$IMAGE_REPO\"}],\"ecrImageHash\":[{\"comparison\":\"EQUALS\",\"value\":\"$DIGEST\"}]}" \
+                          --region "$AWS_REGION" \
                           --output json > inspector-findings.json
-                    """
+                    '''
                 }
             }
         }
@@ -152,23 +148,29 @@ pipeline {
                     string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
                     string(credentialsId: 'region', variable: 'AWS_REGION')
                 ]) {
-                    sh """
+                    sh '''
                         ECR_URL=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-                        IMAGE=\$ECR_URL/${IMAGE_REPO}:${TAG}
+                        IMAGE=$ECR_URL/${IMAGE_REPO}:${TAG}
 
                         docker stop vprofile || true
                         docker rm vprofile || true
 
-                        docker run -d --name vprofile -p 80:8080 \$IMAGE
-                    """
+                        docker run -d --name vprofile -p 80:8080 "$IMAGE"
+                    '''
                 }
             }
         }
     }
 
     post {
-        success { echo "Pipeline Success (Inspector Digest Mode)" }
-        failure { echo "Pipeline Failed" }
-        always { cleanWs() }
+        success {
+            echo "Pipeline Success (Inspector Digest Mode)"
+        }
+        failure {
+            echo "Pipeline Failed"
+        }
+        always {
+            cleanWs()
+        }
     }
 }
