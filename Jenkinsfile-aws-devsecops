@@ -36,32 +36,32 @@ pipeline {
 
         // ================= SAST =================
 
-        stage("SAST - CodeGuru") {
-            steps {
-                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']]) {
-                    sh '''
-                        REVIEW_NAME="vprofile-review-$BUILD_NUMBER"
+        // stage("SAST - CodeGuru") {
+        //     steps {
+        //         withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']]) {
+        //             sh '''
+        //                 REVIEW_NAME="vprofile-review-$BUILD_NUMBER"
 
-                        aws codeguru-reviewer create-code-review \
-                          --name $REVIEW_NAME \
-                          --repository-association-arn <YOUR_ASSOCIATION_ARN> \
-                          --type RepositoryAnalysis={RepositoryHead={BranchName=devsecops}}
+        //                 aws codeguru-reviewer create-code-review \
+        //                   --name $REVIEW_NAME \
+        //                   --repository-association-arn <YOUR_ASSOCIATION_ARN> \
+        //                   --type RepositoryAnalysis={RepositoryHead={BranchName=devsecops}}
 
-                        echo "Waiting for CodeGuru review..."
+        //                 echo "Waiting for CodeGuru review..."
 
-                        STATUS="Pending"
+        //                 STATUS="Pending"
 
-                        while [ "$STATUS" != "Completed" ]; do
-                            sleep 20
-                            STATUS=$(aws codeguru-reviewer list-code-reviews \
-                                --query "CodeReviewSummaries[?Name=='$REVIEW_NAME'].State" \
-                                --output text)
-                            echo "Status: $STATUS"
-                        done
-                    '''
-                }
-            }
-        }
+        //                 while [ "$STATUS" != "Completed" ]; do
+        //                     sleep 20
+        //                     STATUS=$(aws codeguru-reviewer list-code-reviews \
+        //                         --query "CodeReviewSummaries[?Name=='$REVIEW_NAME'].State" \
+        //                         --output text)
+        //                     echo "Status: $STATUS"
+        //                 done
+        //             '''
+        //         }
+        //     }
+        // }
 
         // ================= DOCKER BUILD =================
 
