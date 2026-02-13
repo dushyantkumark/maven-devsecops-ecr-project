@@ -16,7 +16,6 @@ pipeline {
         JFROG_CLI    = tool 'jfrog-cli'
         IMAGE_REPO   = "profilemappimg"
         JFROG_SERVER = "jfrog-instance"
-        JFROG_URL    = "http://3.110.216.190:8082"
         JFROG_DOCKER_REPO = "docker-local"
         JFROG_MAVEN_REPO  = "maven-local"
     }
@@ -42,30 +41,19 @@ pipeline {
             }
         }
 
+        // ---------------- JFROG ARTIFACT UPLOAD ----------------
+
         stage("Publish Artifact to JFrog") {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'jfrog-cred',
-                        usernameVariable: 'JF_USER',
-                        passwordVariable: 'JF_PASS'
-                    )
-                ]) {
-                    sh '''
-                        $JFROG_CLI/jf config add $JFROG_SERVER \
-                        --url=$JFROG_URL \
-                        --user=$JF_USER \
-                        --password=$JF_PASS \
-                        --interactive=false \
-                        --insecure-tls=true
-
-                        $JFROG_CLI/jf rt upload "target/*.war" \
-                        $JFROG_MAVEN_REPO/ \
-                        --server-id=$JFROG_SERVER
-                    '''
-                }
+                sh '''
+                    $JFROG_CLI/jf rt upload "target/*.war" \
+                    maven-local/ \
+                    --server-id=jfrog-instance
+                '''
             }
         }
+
+        // ---------------- SONAR ----------------
 
         stage("SonarQube Analysis") {
             steps {
@@ -88,6 +76,8 @@ pipeline {
             }
         }
 
+        // ---------------- OWASP ----------------
+
         stage("OWASP Dependency Check") {
             steps {
                 dependencyCheck(
@@ -97,6 +87,8 @@ pipeline {
                 dependencyCheckPublisher(pattern: '**/dependency-check-report.xml')
             }
         }
+
+        // ---------------- TRIVY ----------------
 
         stage("Trivy FS Scan") {
             steps {
@@ -120,29 +112,24 @@ pipeline {
             }
         }
 
+        // ---------------- PUSH DOCKER TO JFROG ----------------
+
         stage("Push Image to JFrog") {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'jfrog-cred',
-                        usernameVariable: 'JF_USER',
-                        passwordVariable: 'JF_PASS'
-                    )
-                ]) {
-                    script {
+                script {
+                    def JFROG_HOST = "3.110.216.190:8082"
+                    def JFROG_IMAGE = "${JFROG_HOST}/${JFROG_DOCKER_REPO}/${IMAGE_REPO}:${env.TAG}"
 
-                        def JFROG_HOST = JFROG_URL.replace('http://','')
-                        def JFROG_IMAGE = "${JFROG_HOST}/${JFROG_DOCKER_REPO}/${IMAGE_REPO}:${env.TAG}"
-
-                        sh """
-                            docker login ${JFROG_HOST} -u ${JF_USER} -p ${JF_PASS}
-                            docker tag temp-image:${env.TAG} ${JFROG_IMAGE}
-                            docker push ${JFROG_IMAGE}
-                        """
-                    }
+                    sh """
+                        docker login ${JFROG_HOST} -u admin -p <YOUR_API_KEY>
+                        docker tag temp-image:${env.TAG} ${JFROG_IMAGE}
+                        docker push ${JFROG_IMAGE}
+                    """
                 }
             }
         }
+
+        // ---------------- PUSH TO ECR ----------------
 
         stage("Push to ECR") {
             steps {
@@ -168,11 +155,15 @@ pipeline {
             }
         }
 
+        // ---------------- MANUAL APPROVAL ----------------
+
         stage("Manual Approval") {
             steps {
                 input message: "Approve Deployment?"
             }
         }
+
+        // ---------------- DEPLOY ----------------
 
         stage("Deploy Container") {
             steps {
@@ -198,6 +189,8 @@ pipeline {
                 }
             }
         }
+
+        // ---------------- DAST ----------------
 
         stage("DAST - OWASP ZAP") {
             when {
