@@ -14,8 +14,8 @@ pipeline {
     environment {
         SCANNER_HOME = tool 'sonar-scanner'
         JFROG_CLI    = tool 'jfrog-cli'
-        IMAGE_REPO   = "profilemappimg"
         JFROG_SERVER = "jfrog-artifactory"
+        IMAGE_REPO   = "profilemappimg"
     }
 
     stages {
@@ -39,20 +39,20 @@ pipeline {
             }
         }
 
-        // ---------------- JFROG ARTIFACT UPLOAD ----------------
+        // ================= JFROG UPLOAD (WAR ONLY) =================
 
         stage("Publish Artifact to JFrog") {
             steps {
-                sh '''
-                    $JFROG_CLI/jf rt upload \
+                sh """
+                    ${JFROG_CLI}/jf rt upload \
                     "target/*.war" \
                     maven-local/ \
-                    --server-id=jfrog-artifactory
-                '''
+                    --server-id=${JFROG_SERVER}
+                """
             }
         }
 
-        // ---------------- SONAR ----------------
+        // ================= SONAR =================
 
         stage("SonarQube Analysis") {
             steps {
@@ -75,7 +75,7 @@ pipeline {
             }
         }
 
-        // ---------------- OWASP ----------------
+        // ================= OWASP =================
 
         stage("OWASP Dependency Check") {
             steps {
@@ -87,7 +87,7 @@ pipeline {
             }
         }
 
-        // ---------------- TRIVY ----------------
+        // ================= TRIVY =================
 
         stage("Trivy FS Scan") {
             steps {
@@ -95,7 +95,7 @@ pipeline {
             }
         }
 
-        // ---------------- DOCKER BUILD ----------------
+        // ================= DOCKER BUILD =================
 
         stage("Build Docker Image") {
             steps {
@@ -113,7 +113,7 @@ pipeline {
             }
         }
 
-        // ---------------- PUSH TO ECR ----------------
+        // ================= PUSH TO ECR =================
 
         stage("Push to ECR") {
             steps {
@@ -139,7 +139,7 @@ pipeline {
             }
         }
 
-        // ---------------- MANUAL APPROVAL ----------------
+        // ================= MANUAL APPROVAL =================
 
         stage("Manual Approval") {
             steps {
@@ -147,7 +147,7 @@ pipeline {
             }
         }
 
-        // ---------------- DEPLOY ----------------
+        // ================= DEPLOY =================
 
         stage("Deploy Container") {
             steps {
@@ -174,7 +174,7 @@ pipeline {
             }
         }
 
-        // ---------------- DAST ----------------
+        // ================= DAST =================
 
         stage("DAST - OWASP ZAP") {
             when {
