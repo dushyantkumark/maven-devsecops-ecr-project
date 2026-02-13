@@ -11,7 +11,7 @@ pipeline {
     }
 
     environment {
-        IMAGE_REPO = "profilemappimg"
+        IMAGE_REPO  = "profilemappimg"
         BRANCH_NAME = "devsecops"
     }
 
@@ -40,7 +40,14 @@ pipeline {
             steps {
                 script {
                     env.TAG = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG : env.BUILD_NUMBER
-                    sh "docker build -t temp-image:${env.TAG} ."
+
+                    sh '''
+                        docker buildx build \
+                          --platform linux/amd64 \
+                          --provenance=false \
+                          --output type=docker \
+                          -t temp-image:${TAG} .
+                    '''
                 }
             }
         }
@@ -58,7 +65,7 @@ pipeline {
                             ECR_URL=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
 
                             aws ecr get-login-password --region "$AWS_REGION" \
-                            | docker login --username AWS --password-stdin "$ECR_URL"
+                              | docker login --username AWS --password-stdin "$ECR_URL"
 
                             docker tag temp-image:${TAG} "$ECR_URL/${IMAGE_REPO}:${TAG}"
                             docker push "$ECR_URL/${IMAGE_REPO}:${TAG}"
