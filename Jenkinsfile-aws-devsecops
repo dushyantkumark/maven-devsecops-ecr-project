@@ -18,7 +18,9 @@ pipeline {
     stages {
 
         stage("Clean Workspace") {
-            steps { cleanWs() }
+            steps {
+                cleanWs()
+            }
         }
 
         stage("Checkout Code") {
@@ -88,7 +90,10 @@ pipeline {
                         for i in $(seq 1 40)
                         do
                           STATUS=$(aws inspector2 list-coverage \
-                            --filter-criteria "{\"ecrRepositoryName\":[{\"comparison\":\"EQUALS\",\"value\":\"$IMAGE_REPO\"}],\"ecrImageTags\":[{\"comparison\":\"EQUALS\",\"value\":\"$TAG\"}]}" \
+                            --filter-criteria '{
+                              "ecrRepositoryName":[{"comparison":"EQUALS","value":"'"$IMAGE_REPO"'"}],
+                              "ecrImageTags":[{"comparison":"EQUALS","value":"'"$TAG"'"}]
+                            }' \
                             --region "$AWS_REGION" \
                             --query "coveredResources[].scanStatus.statusCode" \
                             --output text | head -n 1)
@@ -117,7 +122,10 @@ pipeline {
                 ]) {
                     sh '''
                         aws inspector2 list-findings \
-                          --filter-criteria "{\"ecrRepositoryName\":[{\"comparison\":\"EQUALS\",\"value\":\"$IMAGE_REPO\"}],\"ecrImageTags\":[{\"comparison\":\"EQUALS\",\"value\":\"$TAG\"}]}" \
+                          --filter-criteria '{
+                            "ecrImageRepositoryName":[{"comparison":"EQUALS","value":"'"$IMAGE_REPO"'"}],
+                            "ecrImageHash":[{"comparison":"EQUALS","value":"'"$DIGEST"'"}]
+                          }' \
                           --region "$AWS_REGION" \
                           --output json > inspector-findings.json
                     '''
@@ -158,8 +166,14 @@ pipeline {
     }
 
     post {
-        success { echo "Pipeline Success (Inspector Working)" }
-        failure { echo "Pipeline Failed" }
-        always  { cleanWs() }
+        success {
+            echo "Pipeline Success (Inspector Working)"
+        }
+        failure {
+            echo "Pipeline Failed"
+        }
+        always {
+            cleanWs()
+        }
     }
 }
