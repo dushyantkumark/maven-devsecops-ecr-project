@@ -63,7 +63,7 @@ pipeline {
 
         // ================= SONAR =================
 
-        stage("SonarQube Analysis") {
+        stage("SonarQube Analysis [SAST : Static Application Security Testing]") {
             steps {
                 withSonarQubeEnv('sonar-server') {
                     sh """
@@ -86,7 +86,7 @@ pipeline {
 
         // ================= OWASP =================
 
-        stage("OWASP Dependency Check") {
+        stage("OWASP Dependency Check [SCA : Software Composition Analysis]") {
             steps {
                 dependencyCheck(
                     additionalArguments: '''
@@ -106,7 +106,7 @@ pipeline {
 
         // ================= TRIVY FS =================
 
-        stage("Trivy FS Scan") {
+        stage("Trivy FS Scan [SCA : Software Composition Analysis]") {
             steps {
                 sh '''
                     trivy fs \
@@ -130,7 +130,7 @@ pipeline {
             }
         }
 
-        stage("Trivy Image Scan") {
+        stage("Trivy Image Scan [SCA : Software Composition Analysis]") {
             steps {
                 sh """
                     trivy image \
@@ -198,7 +198,7 @@ pipeline {
 
         // ================= DAST =================
 
-        stage("DAST - OWASP ZAP") {
+        stage("DAST - OWASP ZAP [DAST : Dynamic Application Security Testing]") {
             when {
                 expression { params.SKIP_DAST == false }
             }
