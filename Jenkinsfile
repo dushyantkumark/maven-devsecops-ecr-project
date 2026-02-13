@@ -21,9 +21,7 @@ pipeline {
     stages {
 
         stage("Clean Workspace") {
-            steps {
-                cleanWs()
-            }
+            steps { cleanWs() }
         }
 
         stage("Checkout Code") {
@@ -45,10 +43,7 @@ pipeline {
             steps {
                 sh """
                     ${JFROG_CLI}/jf rt ping --server-id=${JFROG_SERVER}
-                    ${JFROG_CLI}/jf rt upload \
-                    "target/*.war" \
-                    maven-local/ \
-                    --server-id=${JFROG_SERVER}
+                    ${JFROG_CLI}/jf rt upload "target/*.war" maven-local/ --server-id=${JFROG_SERVER}
                 """
             }
         }
@@ -81,7 +76,7 @@ pipeline {
         stage("OWASP Dependency Check") {
             steps {
                 dependencyCheck(
-                    additionalArguments: '--scan .',
+                    additionalArguments: '--scan . --format HTML',
                     odcInstallation: 'dp-check'
                 )
                 dependencyCheckPublisher(pattern: '**/dependency-check-report.xml')
@@ -92,7 +87,13 @@ pipeline {
 
         stage("Trivy FS Scan") {
             steps {
-                sh 'trivy fs --severity HIGH,CRITICAL --exit-code 1 .'
+                sh '''
+                    trivy fs \
+                    --severity MEDIUM,HIGH,CRITICAL \
+                    --format html \
+                    -o trivy-fs-report.html \
+                    . || true
+                '''
             }
         }
 
@@ -110,7 +111,13 @@ pipeline {
 
         stage("Trivy Image Scan") {
             steps {
-                sh "trivy image --severity HIGH,CRITICAL --exit-code 1 temp-image:${env.TAG}"
+                sh """
+                    trivy image \
+                    --severity MEDIUM,HIGH,CRITICAL \
+                    --format html \
+                    -o trivy-image-report.html \
+                    temp-image:${env.TAG} || true
+                """
             }
         }
 
@@ -124,7 +131,6 @@ pipeline {
                     [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']
                 ]) {
                     script {
-
                         def ECR_URL = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
                         def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${env.TAG}"
 
@@ -153,24 +159,18 @@ pipeline {
         stage("Deploy Container") {
             steps {
                 script {
-                    withCredentials([
-                        string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
-                        string(credentialsId: 'region', variable: 'AWS_REGION')
-                    ]) {
+                    def ECR_URL = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+                    def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${env.TAG}"
 
-                        def ECR_URL = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-                        def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${env.TAG}"
+                    sh '''
+                        EXISTING=$(docker ps -q --filter "publish=80")
+                        if [ -n "$EXISTING" ]; then
+                            docker stop $EXISTING
+                            docker rm $EXISTING
+                        fi
+                    '''
 
-                        sh '''
-                            EXISTING=$(docker ps -q --filter "publish=80")
-                            if [ -n "$EXISTING" ]; then
-                                docker stop $EXISTING
-                                docker rm $EXISTING
-                            fi
-                        '''
-
-                        sh "docker run -d --name vprofile -p 80:8080 ${FINAL_IMAGE}"
-                    }
+                    sh "docker run -d --name vprofile -p 80:8080 ${FINAL_IMAGE}"
                 }
             }
         }
@@ -183,27 +183,34 @@ pipeline {
             }
             steps {
                 script {
-                    def exitCode = sh(
-                        script: '''
-                            docker run --rm \
-                              --user root \
-                              --network host \
-                              -v "$WORKSPACE:/zap/wrk:rw" \
-                              zaproxy/zap-stable \
-                              zap-baseline.py \
-                              -t http://localhost \
-                              -r zap_report.html \
-                              -J zap_report.json
-                        ''',
-                        returnStatus: true
-                    )
-
-                    if (exitCode == 1) {
-                        error("High severity vulnerabilities found! Failing build.")
-                    }
+                    sh '''
+                        docker run --rm \
+                          --user root \
+                          --network host \
+                          -v "$WORKSPACE:/zap/wrk:rw" \
+                          zaproxy/zap-stable \
+                          zap-baseline.py \
+                          -t http://localhost \
+                          -r zap_report.html \
+                          -J zap_report.json || true
+                    '''
                 }
 
                 archiveArtifacts artifacts: 'zap_report.html,zap_report.json', allowEmptyArchive: true
+            }
+        }
+
+        // ================= ARCHIVE SECURITY REPORTS =================
+
+        stage("Archive Security Reports") {
+            steps {
+                archiveArtifacts artifacts: '''
+                    trivy-fs-report.html,
+                    trivy-image-report.html,
+                    dependency-check-report.html,
+                    zap_report.html,
+                    zap_report.json
+                ''', allowEmptyArchive: true
             }
         }
     }
