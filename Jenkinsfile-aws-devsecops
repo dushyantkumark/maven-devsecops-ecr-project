@@ -34,16 +34,15 @@ pipeline {
             }
         }
 
-        stage("Build Docker Image (amd64 only)") {
+        // ✅ FIXED: Using classic docker build (NOT buildx)
+        stage("Build Docker Image") {
             steps {
                 script {
                     def tag = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG : env.BUILD_NUMBER
                     env.TAG = tag
 
                     sh """
-                        docker buildx build \
-                          --platform linux/amd64 \
-                          --load \
+                        docker build \
                           -t temp-image:${env.TAG} .
                     """
                 }
@@ -58,6 +57,8 @@ pipeline {
                     [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']
                 ]) {
                     sh '''
+                        set -e
+
                         ECR_URL=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
                         aws ecr get-login-password --region $AWS_REGION \
@@ -76,9 +77,9 @@ pipeline {
                     string(credentialsId: 'region', variable: 'AWS_REGION')
                 ]) {
                     sh '''
-                        echo "Waiting for Inspector scan to complete..."
+                        echo "Waiting for Inspector scan..."
 
-                        for i in {1..20}
+                        for i in {1..30}
                         do
                           STATUS=$(aws inspector2 list-coverage \
                             --filter-criteria "{
@@ -89,15 +90,23 @@ pipeline {
                             --query "coveredResources[0].scanStatus.statusCode" \
                             --output text)
 
-                          echo "Current Scan Status: $STATUS"
+                          echo "Scan Status: $STATUS"
 
                           if [ "$STATUS" = "ACTIVE" ]; then
-                            echo "Scan completed."
-                            break
+                            echo "✅ Scan completed."
+                            exit 0
                           fi
 
-                          sleep 15
+                          if [ "$STATUS" = "FAILED" ]; then
+                            echo "❌ Scan failed."
+                            exit 1
+                          fi
+
+                          sleep 20
                         done
+
+                        echo "❌ Scan did not complete in time."
+                        exit 1
                     '''
                 }
             }
@@ -125,46 +134,28 @@ pipeline {
                         LOW=$(jq '[.findings[] | select(.severity=="LOW")] | length' inspector-findings.json)
                         TOTAL=$(jq '.findings | length' inspector-findings.json)
 
+                        echo "Total: $TOTAL | Critical: $CRITICAL | High: $HIGH"
+
+                        if [ "$CRITICAL" -gt 0 ]; then
+                          echo "❌ Critical vulnerabilities found. Failing build."
+                          exit 1
+                        fi
+
                         cat <<EOF > inspector-report.html
 <html>
-<head>
-<title>Amazon Inspector Report</title>
-<style>
-body { font-family: Arial; background:#f4f6f9; }
-h2 { color:#232f3e; }
-table { border-collapse: collapse; width: 70%; background:white; }
-th, td { border: 1px solid #ddd; padding: 10px; text-align: center; }
-th { background-color: #232f3e; color: white; }
-.critical { background-color: #d9534f; color: white; font-weight:bold; }
-.high { background-color: #f0ad4e; color: white; font-weight:bold; }
-.medium { background-color: #ffd966; font-weight:bold; }
-.low { background-color: #5bc0de; color:white; font-weight:bold; }
-.total { background-color:#5cb85c; color:white; font-weight:bold; }
-</style>
-</head>
+<head><title>Amazon Inspector Report</title></head>
 <body>
 <h2>Amazon Inspector Vulnerability Summary</h2>
-<table>
-<tr>
-<th>Total</th>
-<th>Critical</th>
-<th>High</th>
-<th>Medium</th>
-<th>Low</th>
-</tr>
-<tr>
-<td class="total">$TOTAL</td>
-<td class="critical">$CRITICAL</td>
-<td class="high">$HIGH</td>
-<td class="medium">$MEDIUM</td>
-<td class="low">$LOW</td>
-</tr>
-</table>
+<ul>
+<li>Total: $TOTAL</li>
+<li>Critical: $CRITICAL</li>
+<li>High: $HIGH</li>
+<li>Medium: $MEDIUM</li>
+<li>Low: $LOW</li>
+</ul>
 </body>
 </html>
 EOF
-
-                        echo "HTML report generated successfully."
                     '''
                 }
             }
@@ -203,7 +194,7 @@ EOF
     }
 
     post {
-        success { echo "✅ AWS DevSecOps Pipeline Success (Inspector Active Mode)" }
+        success { echo "✅ AWS DevSecOps Pipeline Success (Inspector Compatible Mode)" }
         failure { echo "❌ Pipeline Failed" }
         always { cleanWs() }
     }
