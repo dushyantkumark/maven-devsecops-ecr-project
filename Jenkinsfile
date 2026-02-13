@@ -21,7 +21,9 @@ pipeline {
     stages {
 
         stage("Clean Workspace") {
-            steps { cleanWs() }
+            steps {
+                cleanWs()
+            }
         }
 
         stage("Checkout Code") {
@@ -37,7 +39,7 @@ pipeline {
             }
         }
 
-        // ================= JFROG WAR UPLOAD =================
+        // ================= JFROG =================
 
         stage("Publish Artifact to JFrog") {
             steps {
@@ -76,10 +78,18 @@ pipeline {
         stage("OWASP Dependency Check") {
             steps {
                 dependencyCheck(
-                    additionalArguments: '--scan . --format HTML',
+                    additionalArguments: '''
+                        --scan .
+                        --format HTML
+                        --format XML
+                        --disableAssembly
+                    ''',
                     odcInstallation: 'dp-check'
                 )
-                dependencyCheckPublisher(pattern: 'dependency-check-report.xml')
+
+                dependencyCheckPublisher(
+                    pattern: 'dependency-check-report.xml'
+                )
             }
         }
 
@@ -130,21 +140,15 @@ pipeline {
                     string(credentialsId: 'region', variable: 'AWS_REGION'),
                     [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']
                 ]) {
-                    script {
+                    sh '''
+                        ECR_URL=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
-                        def ECR_URL = "${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
-                        def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${env.TAG}"
+                        aws ecr get-login-password --region $AWS_REGION \
+                        | docker login --username AWS --password-stdin $ECR_URL
 
-                        sh '''
-                            aws ecr get-login-password --region $AWS_REGION \
-                            | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
-                        '''
-
-                        sh """
-                            docker tag temp-image:${env.TAG} ${FINAL_IMAGE}
-                            docker push ${FINAL_IMAGE}
-                        """
-                    }
+                        docker tag temp-image:$TAG $ECR_URL/profilemappimg:$TAG
+                        docker push $ECR_URL/profilemappimg:$TAG
+                    '''
                 }
             }
         }
@@ -165,21 +169,18 @@ pipeline {
                     string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
                     string(credentialsId: 'region', variable: 'AWS_REGION')
                 ]) {
-                    script {
+                    sh '''
+                        ECR_URL=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+                        IMAGE=$ECR_URL/profilemappimg:$TAG
 
-                        def ECR_URL = "${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
-                        def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${env.TAG}"
+                        EXISTING=$(docker ps -q --filter "publish=80")
+                        if [ -n "$EXISTING" ]; then
+                            docker stop $EXISTING
+                            docker rm $EXISTING
+                        fi
 
-                        sh '''
-                            EXISTING=$(docker ps -q --filter "publish=80")
-                            if [ -n "$EXISTING" ]; then
-                                docker stop $EXISTING
-                                docker rm $EXISTING
-                            fi
-                        '''
-
-                        sh "docker run -d --name vprofile -p 80:8080 ${FINAL_IMAGE}"
-                    }
+                        docker run -d --name vprofile -p 80:8080 $IMAGE
+                    '''
                 }
             }
         }
@@ -207,7 +208,7 @@ pipeline {
             }
         }
 
-        // ================= ARCHIVE SECURITY REPORTS =================
+        // ================= ARCHIVE REPORTS =================
 
         stage("Archive Security Reports") {
             steps {
@@ -223,8 +224,14 @@ pipeline {
     }
 
     post {
-        success { echo "✅ Pipeline Completed Successfully" }
-        failure { echo "❌ Pipeline Failed" }
-        always { cleanWs() }
+        success {
+            echo "✅ Pipeline Completed Successfully"
+        }
+        failure {
+            echo "❌ Pipeline Failed"
+        }
+        always {
+            cleanWs()
+        }
     }
 }
