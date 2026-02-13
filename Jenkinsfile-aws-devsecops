@@ -18,7 +18,9 @@ pipeline {
     stages {
 
         stage("Clean Workspace") {
-            steps { cleanWs() }
+            steps {
+                cleanWs()
+            }
         }
 
         stage("Checkout Code") {
@@ -34,16 +36,15 @@ pipeline {
             }
         }
 
-        // ✅ FIXED: Using classic docker build (NOT buildx)
+        // ✅ Classic Docker Builder (NO OCI index)
         stage("Build Docker Image") {
             steps {
                 script {
-                    def tag = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG : env.BUILD_NUMBER
-                    env.TAG = tag
+                    env.TAG = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG : env.BUILD_NUMBER
 
                     sh """
-                        docker build \
-                          -t temp-image:${env.TAG} .
+                        DOCKER_BUILDKIT=0 docker build \
+                        -t temp-image:${env.TAG} .
                     """
                 }
             }
@@ -93,20 +94,22 @@ pipeline {
                           echo "Scan Status: $STATUS"
 
                           if [ "$STATUS" = "ACTIVE" ]; then
-                            echo "✅ Scan completed."
-                            exit 0
+                            echo "Scan completed."
+                            break
                           fi
 
                           if [ "$STATUS" = "FAILED" ]; then
-                            echo "❌ Scan failed."
+                            echo "Scan failed."
                             exit 1
                           fi
 
                           sleep 20
                         done
 
-                        echo "❌ Scan did not complete in time."
-                        exit 1
+                        if [ "$STATUS" != "ACTIVE" ]; then
+                          echo "Scan did not complete in time."
+                          exit 1
+                        fi
                     '''
                 }
             }
@@ -137,7 +140,7 @@ pipeline {
                         echo "Total: $TOTAL | Critical: $CRITICAL | High: $HIGH"
 
                         if [ "$CRITICAL" -gt 0 ]; then
-                          echo "❌ Critical vulnerabilities found. Failing build."
+                          echo "Critical vulnerabilities found. Failing build."
                           exit 1
                         fi
 
@@ -194,8 +197,8 @@ EOF
     }
 
     post {
-        success { echo "✅ AWS DevSecOps Pipeline Success (Inspector Compatible Mode)" }
-        failure { echo "❌ Pipeline Failed" }
+        success { echo "Pipeline Success (Inspector Compatible Mode)" }
+        failure { echo "Pipeline Failed" }
         always { cleanWs() }
     }
 }
