@@ -50,6 +50,7 @@ pipeline {
                         echo "Waiting for CodeGuru review..."
 
                         STATUS="Pending"
+
                         while [ "$STATUS" != "Completed" ]; do
                             sleep 20
                             STATUS=$(aws codeguru-reviewer list-code-reviews \
@@ -101,18 +102,18 @@ pipeline {
         stage("Inspector Security Gate") {
             steps {
                 withCredentials([
-                    string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
-                    string(credentialsId: 'region', variable: 'AWS_REGION'),
                     [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']
                 ]) {
                     sh '''
-                        echo "Waiting for Inspector scan..."
-
+                        echo "Waiting for Amazon Inspector scan..."
                         sleep 40
 
                         CRITICAL_COUNT=$(aws inspector2 list-findings \
-                          --filter-criteria '{"severity":[{"comparison":"EQUALS","value":"CRITICAL"}]}' \
-                          --query "length(findings[?contains(resources[0].details.awsEcrContainerImage.imageTags, \`$TAG\`)])" \
+                          --filter-criteria '{
+                            "severity":[{"comparison":"EQUALS","value":"CRITICAL"}],
+                            "resourceType":[{"comparison":"EQUALS","value":"AWS_ECR_CONTAINER_IMAGE"}]
+                          }' \
+                          --query "length(findings)" \
                           --output text)
 
                         echo "Critical Findings: $CRITICAL_COUNT"
