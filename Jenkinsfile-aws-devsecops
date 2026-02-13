@@ -90,7 +90,7 @@ pipeline {
                         for i in {1..40}
                         do
                           STATUS=$(aws inspector2 list-coverage \
-                            --filter-criteria '{"ecrRepositoryName":[{"comparison":"EQUALS","value":"'$IMAGE_REPO'"}],"ecrImageTags":[{"comparison":"EQUALS","value":"'$TAG'"}]}' \
+                            --filter-criteria "{\\"ecrRepositoryName\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$IMAGE_REPO\\"}],\\"ecrImageTags\\":[{\\"comparison\\":\\"EQUALS\\",\\"value\\":\\"$TAG\\"}]}" \
                             --region "$AWS_REGION" \
                             --query "coveredResources[0].scanStatus.statusCode" \
                             --output text)
