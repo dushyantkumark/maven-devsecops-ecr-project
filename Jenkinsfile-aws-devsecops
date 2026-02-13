@@ -1,0 +1,162 @@
+pipeline {
+    agent any
+
+    tools {
+        maven 'MAVEN3'
+        jdk 'JDK17'
+    }
+
+    parameters {
+        string(name: 'IMAGE_TAG', defaultValue: '', description: 'Optional custom image tag')
+    }
+
+    environment {
+        IMAGE_REPO = "profilemappimg"
+        BRANCH_NAME = "devsecops"
+    }
+
+    stages {
+
+        stage("Clean Workspace") {
+            steps { cleanWs() }
+        }
+
+        stage("Checkout Code") {
+            steps {
+                git branch: "${BRANCH_NAME}",
+                    url: 'https://github.com/dushyantkumark/maven-devsecops-ecr-project.git'
+            }
+        }
+
+        stage("Build Application") {
+            steps {
+                sh 'mvn clean install -DskipTests'
+            }
+        }
+
+        // ================= SAST =================
+
+        stage("SAST - CodeGuru") {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']]) {
+                    sh '''
+                        REVIEW_NAME="vprofile-review-$BUILD_NUMBER"
+
+                        aws codeguru-reviewer create-code-review \
+                          --name $REVIEW_NAME \
+                          --repository-association-arn <YOUR_ASSOCIATION_ARN> \
+                          --type RepositoryAnalysis={RepositoryHead={BranchName=devsecops}}
+
+                        echo "Waiting for CodeGuru review..."
+
+                        STATUS="Pending"
+                        while [ "$STATUS" != "Completed" ]; do
+                            sleep 20
+                            STATUS=$(aws codeguru-reviewer list-code-reviews \
+                                --query "CodeReviewSummaries[?Name=='$REVIEW_NAME'].State" \
+                                --output text)
+                            echo "Status: $STATUS"
+                        done
+                    '''
+                }
+            }
+        }
+
+        // ================= DOCKER BUILD =================
+
+        stage("Build Docker Image") {
+            steps {
+                script {
+                    def tag = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG : env.BUILD_NUMBER
+                    env.TAG = tag
+                    sh "docker build -t temp-image:${env.TAG} ."
+                }
+            }
+        }
+
+        // ================= PUSH TO ECR =================
+
+        stage("Push to ECR") {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
+                    string(credentialsId: 'region', variable: 'AWS_REGION'),
+                    [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']
+                ]) {
+                    sh '''
+                        ECR_URL=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+                        aws ecr get-login-password --region $AWS_REGION \
+                        | docker login --username AWS --password-stdin $ECR_URL
+
+                        docker tag temp-image:$TAG $ECR_URL/$IMAGE_REPO:$TAG
+                        docker push $ECR_URL/$IMAGE_REPO:$TAG
+                    '''
+                }
+            }
+        }
+
+        // ================= INSPECTOR SECURITY GATE =================
+
+        stage("Inspector Security Gate") {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
+                    string(credentialsId: 'region', variable: 'AWS_REGION'),
+                    [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']
+                ]) {
+                    sh '''
+                        echo "Waiting for Inspector scan..."
+
+                        sleep 40
+
+                        CRITICAL_COUNT=$(aws inspector2 list-findings \
+                          --filter-criteria '{"severity":[{"comparison":"EQUALS","value":"CRITICAL"}]}' \
+                          --query "length(findings[?contains(resources[0].details.awsEcrContainerImage.imageTags, \`$TAG\`)])" \
+                          --output text)
+
+                        echo "Critical Findings: $CRITICAL_COUNT"
+
+                        if [ "$CRITICAL_COUNT" -gt 0 ]; then
+                            echo "❌ CRITICAL vulnerabilities found."
+                            exit 1
+                        fi
+
+                        echo "✅ No Critical vulnerabilities found."
+                    '''
+                }
+            }
+        }
+
+        stage("Manual Approval") {
+            steps {
+                input message: "Approve Deployment?"
+            }
+        }
+
+        stage("Deploy Container") {
+            steps {
+                withCredentials([
+                    string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
+                    string(credentialsId: 'region', variable: 'AWS_REGION')
+                ]) {
+                    sh '''
+                        ECR_URL=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+                        IMAGE=$ECR_URL/$IMAGE_REPO:$TAG
+
+                        docker stop vprofile || true
+                        docker rm vprofile || true
+
+                        docker run -d --name vprofile -p 80:8080 $IMAGE
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success { echo "✅ AWS DevSecOps Pipeline Success" }
+        failure { echo "❌ Pipeline Failed - Security Gate Triggered" }
+        always { cleanWs() }
+    }
+}
