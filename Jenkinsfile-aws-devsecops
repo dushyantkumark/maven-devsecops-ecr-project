@@ -36,25 +36,7 @@ pipeline {
             }
         }
 
-        // 🔥 Docker Build (Inspector Compatible)
-        stage("Build Docker Image") {
-            steps {
-                script {
-                    env.TAG = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG : env.BUILD_NUMBER
-
-                    sh '''
-                        docker buildx build \
-                          --platform linux/amd64 \
-                          --provenance=false \
-                          --sbom=false \
-                          --load \
-                          -t temp-image:${TAG} .
-                    '''
-                }
-            }
-        }
-
-        stage("Push to ECR & Get Digest") {
+        stage("Build & Push to ECR") {
             steps {
                 withCredentials([
                     string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
@@ -62,6 +44,7 @@ pipeline {
                     [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']
                 ]) {
                     script {
+                        env.TAG = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG : env.BUILD_NUMBER
 
                         sh '''
                             ECR_URL=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
@@ -69,8 +52,13 @@ pipeline {
                             aws ecr get-login-password --region "$AWS_REGION" \
                               | docker login --username AWS --password-stdin "$ECR_URL"
 
-                            docker tag temp-image:${TAG} "$ECR_URL/${IMAGE_REPO}:${TAG}"
-                            docker push "$ECR_URL/${IMAGE_REPO}:${TAG}"
+                            docker buildx build \
+                              --platform linux/amd64 \
+                              --provenance=false \
+                              --sbom=false \
+                              -t "$ECR_URL/${IMAGE_REPO}:${TAG}" \
+                              --push \
+                              .
                         '''
 
                         env.DIGEST = sh(
