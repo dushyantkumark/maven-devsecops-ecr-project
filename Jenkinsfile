@@ -39,14 +39,25 @@ pipeline {
             }
         }
 
-        // ================= JFROG =================
+        // ================= JFROG VERSIONED UPLOAD =================
 
         stage("Publish Artifact to JFrog") {
             steps {
-                sh """
-                    ${JFROG_CLI}/jf rt ping --server-id=${JFROG_SERVER}
-                    ${JFROG_CLI}/jf rt upload "target/*.war" maven-local/ --server-id=${JFROG_SERVER}
-                """
+                script {
+
+                    def VERSION = "2.0.${env.BUILD_NUMBER}"
+                    def GROUP_PATH = "com/visualpathit/vprofile/${VERSION}"
+                    def ARTIFACT_NAME = "vprofile-${VERSION}.war"
+
+                    echo "Uploading artifact version: ${VERSION}"
+
+                    sh """
+                        ${JFROG_CLI}/jf rt upload \
+                        target/vprofile-v2.war \
+                        maven-local/${GROUP_PATH}/${ARTIFACT_NAME} \
+                        --server-id=${JFROG_SERVER}
+                    """
+                }
             }
         }
 
@@ -88,7 +99,7 @@ pipeline {
                 )
 
                 dependencyCheckPublisher(
-                    pattern: 'dependency-check-report.xml'
+                    pattern: '**/dependency-check-report.xml'
                 )
             }
         }
@@ -99,10 +110,10 @@ pipeline {
             steps {
                 sh '''
                     trivy fs \
-                    --severity MEDIUM,HIGH,CRITICAL \
-                    --format html \
-                    -o trivy-fs-report.html \
-                    . || true
+                      --severity MEDIUM,HIGH,CRITICAL \
+                      --format html \
+                      -o trivy-fs-report.html \
+                      . || true
                 '''
             }
         }
@@ -112,7 +123,7 @@ pipeline {
         stage("Build Docker Image") {
             steps {
                 script {
-                    def tag = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG : BUILD_NUMBER
+                    def tag = params.IMAGE_TAG?.trim() ? params.IMAGE_TAG : env.BUILD_NUMBER
                     env.TAG = tag
                     sh "docker build -t temp-image:${env.TAG} ."
                 }
@@ -123,10 +134,10 @@ pipeline {
             steps {
                 sh """
                     trivy image \
-                    --severity MEDIUM,HIGH,CRITICAL \
-                    --format html \
-                    -o trivy-image-report.html \
-                    temp-image:${env.TAG} || true
+                      --severity MEDIUM,HIGH,CRITICAL \
+                      --format html \
+                      -o trivy-image-report.html \
+                      temp-image:${env.TAG} || true
                 """
             }
         }
@@ -218,7 +229,8 @@ pipeline {
                     dependency-check-report.html,
                     zap_report.html,
                     zap_report.json
-                ''', allowEmptyArchive: true
+                '''.trim(),
+                allowEmptyArchive: true
             }
         }
     }
