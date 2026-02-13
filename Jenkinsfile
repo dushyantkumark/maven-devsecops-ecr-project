@@ -21,9 +21,7 @@ pipeline {
     stages {
 
         stage("Clean Workspace") {
-            steps {
-                cleanWs()
-            }
+            steps { cleanWs() }
         }
 
         stage("Checkout Code") {
@@ -44,7 +42,6 @@ pipeline {
         stage("Publish Artifact to JFrog") {
             steps {
                 script {
-
                     def VERSION = "2.0.${env.BUILD_NUMBER}"
                     def GROUP_PATH = "com/visualpathit/vprofile/${VERSION}"
                     def ARTIFACT_NAME = "vprofile-${VERSION}.war"
@@ -63,7 +60,7 @@ pipeline {
 
         // ================= SONAR =================
 
-        stage("SonarQube Analysis [SAST : Static Application Security Testing]") {
+        stage("SonarQube Analysis [SAST]") {
             steps {
                 withSonarQubeEnv('sonar-server') {
                     sh """
@@ -86,7 +83,7 @@ pipeline {
 
         // ================= OWASP =================
 
-        stage("OWASP Dependency Check [SCA : Software Composition Analysis]") {
+        stage("OWASP Dependency Check [SCA]") {
             steps {
                 dependencyCheck(
                     additionalArguments: '''
@@ -106,13 +103,15 @@ pipeline {
 
         // ================= TRIVY FS =================
 
-        stage("Trivy FS Scan [SCA : Software Composition Analysis]") {
+        stage("Trivy FS Scan [SCA]") {
             steps {
                 sh '''
+                    echo "Running Trivy File System Scan..."
+
                     trivy fs \
                       --severity MEDIUM,HIGH,CRITICAL \
                       --format html \
-                      -o trivy-fs-report.html \
+                      --output trivy-fs-report.html \
                       . || true
                 '''
             }
@@ -130,15 +129,19 @@ pipeline {
             }
         }
 
-        stage("Trivy Image Scan [SCA : Software Composition Analysis]") {
+        // ================= TRIVY IMAGE =================
+
+        stage("Trivy Image Scan [SCA]") {
             steps {
-                sh """
+                sh '''
+                    echo "Running Trivy Docker Image Scan..."
+
                     trivy image \
                       --severity MEDIUM,HIGH,CRITICAL \
                       --format html \
-                      -o trivy-image-report.html \
-                      temp-image:${env.TAG} || true
-                """
+                      --output trivy-image-report.html \
+                      temp-image:$TAG || true
+                '''
             }
         }
 
@@ -198,7 +201,7 @@ pipeline {
 
         // ================= DAST =================
 
-        stage("DAST - OWASP ZAP [DAST : Dynamic Application Security Testing]") {
+        stage("DAST - OWASP ZAP [DAST]") {
             when {
                 expression { params.SKIP_DAST == false }
             }
@@ -236,14 +239,8 @@ pipeline {
     }
 
     post {
-        success {
-            echo "✅ Pipeline Completed Successfully"
-        }
-        failure {
-            echo "❌ Pipeline Failed"
-        }
-        always {
-            cleanWs()
-        }
+        success { echo "✅ Pipeline Completed Successfully" }
+        failure { echo "❌ Pipeline Failed" }
+        always { cleanWs() }
     }
 }
