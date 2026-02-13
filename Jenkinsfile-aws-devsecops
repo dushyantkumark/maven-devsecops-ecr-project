@@ -90,10 +90,28 @@ pipeline {
                     sh '''
                         echo "Waiting for Inspector scan..."
 
+                        FILTER=$(cat <<EOF
+{
+  "ecrRepositoryName": [
+    {
+      "comparison": "EQUALS",
+      "value": "$IMAGE_REPO"
+    }
+  ],
+  "ecrImageTags": [
+    {
+      "comparison": "EQUALS",
+      "value": "$TAG"
+    }
+  ]
+}
+EOF
+)
+
                         for i in {1..40}
                         do
                           STATUS=$(aws inspector2 list-coverage \
-                            --filter-criteria "{\"ecrRepositoryName\":[{\"comparison\":\"EQUALS\",\"value\":\"$IMAGE_REPO\"}],\"ecrImageTags\":[{\"comparison\":\"EQUALS\",\"value\":\"$TAG\"}]}" \
+                            --filter-criteria "$FILTER" \
                             --region "$AWS_REGION" \
                             --query "coveredResources[0].scanStatus.statusCode" \
                             --output text)
@@ -121,8 +139,26 @@ pipeline {
                     string(credentialsId: 'region', variable: 'AWS_REGION')
                 ]) {
                     sh '''
+                        FINDINGS_FILTER=$(cat <<EOF
+{
+  "ecrImageRepositoryName": [
+    {
+      "comparison": "EQUALS",
+      "value": "$IMAGE_REPO"
+    }
+  ],
+  "ecrImageHash": [
+    {
+      "comparison": "EQUALS",
+      "value": "$DIGEST"
+    }
+  ]
+}
+EOF
+)
+
                         aws inspector2 list-findings \
-                          --filter-criteria "{\"ecrImageRepositoryName\":[{\"comparison\":\"EQUALS\",\"value\":\"$IMAGE_REPO\"}],\"ecrImageHash\":[{\"comparison\":\"EQUALS\",\"value\":\"$DIGEST\"}]}" \
+                          --filter-criteria "$FINDINGS_FILTER" \
                           --region "$AWS_REGION" \
                           --output json > inspector-findings.json
                     '''
@@ -164,7 +200,7 @@ pipeline {
 
     post {
         success {
-            echo "Pipeline Success (Inspector Digest Mode)"
+            echo "Pipeline Success (Inspector Working)"
         }
         failure {
             echo "Pipeline Failed"
