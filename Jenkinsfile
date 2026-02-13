@@ -79,7 +79,7 @@ pipeline {
                     additionalArguments: '--scan . --format HTML',
                     odcInstallation: 'dp-check'
                 )
-                dependencyCheckPublisher(pattern: '**/dependency-check-report.xml')
+                dependencyCheckPublisher(pattern: 'dependency-check-report.xml')
             }
         }
 
@@ -131,13 +131,16 @@ pipeline {
                     [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']
                 ]) {
                     script {
-                        def ECR_URL = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+                        def ECR_URL = "${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
                         def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${env.TAG}"
 
-                        sh """
-                            aws ecr get-login-password --region ${AWS_REGION} \
-                            | docker login --username AWS --password-stdin ${ECR_URL}
+                        sh '''
+                            aws ecr get-login-password --region $AWS_REGION \
+                            | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+                        '''
 
+                        sh """
                             docker tag temp-image:${env.TAG} ${FINAL_IMAGE}
                             docker push ${FINAL_IMAGE}
                         """
@@ -158,19 +161,25 @@ pipeline {
 
         stage("Deploy Container") {
             steps {
-                script {
-                    def ECR_URL = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-                    def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${env.TAG}"
+                withCredentials([
+                    string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
+                    string(credentialsId: 'region', variable: 'AWS_REGION')
+                ]) {
+                    script {
 
-                    sh '''
-                        EXISTING=$(docker ps -q --filter "publish=80")
-                        if [ -n "$EXISTING" ]; then
-                            docker stop $EXISTING
-                            docker rm $EXISTING
-                        fi
-                    '''
+                        def ECR_URL = "${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
+                        def FINAL_IMAGE = "${ECR_URL}/${IMAGE_REPO}:${env.TAG}"
 
-                    sh "docker run -d --name vprofile -p 80:8080 ${FINAL_IMAGE}"
+                        sh '''
+                            EXISTING=$(docker ps -q --filter "publish=80")
+                            if [ -n "$EXISTING" ]; then
+                                docker stop $EXISTING
+                                docker rm $EXISTING
+                            fi
+                        '''
+
+                        sh "docker run -d --name vprofile -p 80:8080 ${FINAL_IMAGE}"
+                    }
                 }
             }
         }
@@ -182,19 +191,17 @@ pipeline {
                 expression { params.SKIP_DAST == false }
             }
             steps {
-                script {
-                    sh '''
-                        docker run --rm \
-                          --user root \
-                          --network host \
-                          -v "$WORKSPACE:/zap/wrk:rw" \
-                          zaproxy/zap-stable \
-                          zap-baseline.py \
-                          -t http://localhost \
-                          -r zap_report.html \
-                          -J zap_report.json || true
-                    '''
-                }
+                sh '''
+                    docker run --rm \
+                      --user root \
+                      --network host \
+                      -v "$WORKSPACE:/zap/wrk:rw" \
+                      zaproxy/zap-stable \
+                      zap-baseline.py \
+                      -t http://localhost \
+                      -r zap_report.html \
+                      -J zap_report.json || true
+                '''
 
                 archiveArtifacts artifacts: 'zap_report.html,zap_report.json', allowEmptyArchive: true
             }
