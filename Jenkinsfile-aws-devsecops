@@ -166,14 +166,24 @@ pipeline {
     }
 
     post {
-        success {
-            echo "Pipeline Success (Inspector Working)"
-        }
-        failure {
-            echo "Pipeline Failed"
-        }
+
         always {
-            cleanWs()
+            script {
+
+                echo "Running cleanup..."
+
+                sh 'docker image prune -f'
+
+                echo "Unused image Cleanup completed."
+            }
+        }
+
+        success {
+            echo "Deployment Pipeline Successful"
+        }
+
+        failure {
+            echo "Deployment Pipeline Failed"
         }
     }
 }
