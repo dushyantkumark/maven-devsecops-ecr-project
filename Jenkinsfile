@@ -75,9 +75,10 @@ pipeline {
                 withSonarQubeEnv('sonar-server') {
                     sh """
                         ${env.SCANNER_HOME}/bin/sonar-scanner \
-                        -Dsonar.projectKey=vprofile-${env.BRANCH_NAME} \
-                        -Dsonar.projectName=vprofile-${env.BRANCH_NAME} \
+                        -Dsonar.projectKey=vprofile \
+                        -Dsonar.projectName=vprofile \
                         -Dsonar.projectVersion=${env.VERSION} \
+                        -Dsonar.branch.name=${env.BRANCH_NAME} \
                         -Dsonar.sources=src \
                         -Dsonar.java.binaries=target/classes
                     """
