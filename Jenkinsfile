@@ -28,6 +28,11 @@ pipeline {
             steps {
                 git branch: 'devsecops',
                     url: 'https://github.com/dushyantkumark/maven-devsecops-ecr-project.git'
+
+                script {
+                    env.GIT_COMMIT_ID = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    env.BRANCH_NAME  = sh(script: "git rev-parse --abbrev-ref HEAD", returnStdout: true).trim()
+                }
             }
         }
 
@@ -59,7 +64,10 @@ pipeline {
                 withSonarQubeEnv('sonar-server') {
                     sh """
                         ${SCANNER_HOME}/bin/sonar-scanner \
-                        -Dsonar.projectKey=vprofile \
+                        -Dsonar.projectKey=vprofile-${env.BRANCH_NAME} \
+                        -Dsonar.projectName=vprofile-${env.BRANCH_NAME} \
+                        -Dsonar.projectVersion=${env.BUILD_NUMBER} \
+                        -Dsonar.scm.revision=${env.GIT_COMMIT_ID} \
                         -Dsonar.sources=src \
                         -Dsonar.java.binaries=target/classes
                     """
@@ -194,24 +202,20 @@ pipeline {
     post {
         always {
 
-            // Dependency Check Trend
             dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
 
-            // Trivy FS Trend
             recordIssues(
                 id: 'trivy-fs',
                 name: 'Trivy FS Scan',
                 tools: [trivy(pattern: 'trivy-fs-report.json')]
             )
 
-            // Trivy Image Trend
             recordIssues(
                 id: 'trivy-image',
                 name: 'Trivy Image Scan',
                 tools: [trivy(pattern: 'trivy-image-report.json')]
             )
 
-            // Archive all reports
             archiveArtifacts artifacts: '''
                 trivy-fs-report.json,
                 trivy-image-report.json,
