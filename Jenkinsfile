@@ -197,13 +197,21 @@ pipeline {
             // Dependency Check Trend
             dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
 
-            // Trivy Trend Graph (Warnings NG)
-            recordIssues tools: [
-                trivy(pattern: 'trivy-fs-report.json'),
-                trivy(pattern: 'trivy-image-report.json')
-            ]
+            // Trivy FS Trend
+            recordIssues(
+                id: 'trivy-fs',
+                name: 'Trivy FS Scan',
+                tools: [trivy(pattern: 'trivy-fs-report.json')]
+            )
 
-            // Archive all security reports
+            // Trivy Image Trend
+            recordIssues(
+                id: 'trivy-image',
+                name: 'Trivy Image Scan',
+                tools: [trivy(pattern: 'trivy-image-report.json')]
+            )
+
+            // Archive all reports
             archiveArtifacts artifacts: '''
                 trivy-fs-report.json,
                 trivy-image-report.json,
