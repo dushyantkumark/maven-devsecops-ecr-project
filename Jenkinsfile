@@ -21,9 +21,7 @@ pipeline {
     stages {
 
         stage("Clean Workspace") {
-            steps {
-                cleanWs()
-            }
+            steps { cleanWs() }
         }
 
         stage("Checkout Code") {
@@ -45,8 +43,6 @@ pipeline {
                     def VERSION = "2.0.${env.BUILD_NUMBER}"
                     def GROUP_PATH = "com/visualpathit/vprofile/${VERSION}"
                     def ARTIFACT_NAME = "vprofile-${VERSION}.war"
-
-                    echo "Uploading artifact version: ${VERSION}"
 
                     sh """
                         ${JFROG_CLI}/jf rt upload \
@@ -84,15 +80,10 @@ pipeline {
                 dependencyCheck(
                     additionalArguments: '''
                         --scan .
-                        --format HTML
                         --format XML
                         --disableAssembly
                     ''',
                     odcInstallation: 'dp-check'
-                )
-
-                dependencyCheckPublisher(
-                    pattern: '**/dependency-check-report.xml'
                 )
             }
         }
@@ -100,13 +91,10 @@ pipeline {
         stage("Trivy FS Scan [SCA]") {
             steps {
                 sh '''
-                    echo "Running Trivy File System Scan..."
-
                     trivy fs \
                       --severity MEDIUM,HIGH,CRITICAL \
-                      --format template \
-                      --template "@/usr/local/share/trivy/templates/html.tpl" \
-                      --output trivy-fs-report.html \
+                      --format json \
+                      --output trivy-fs-report.json \
                       . || true
                 '''
             }
@@ -125,13 +113,10 @@ pipeline {
         stage("Trivy Image Scan [SCA]") {
             steps {
                 sh '''
-                    echo "Running Trivy Docker Image Scan..."
-
                     trivy image \
                       --severity MEDIUM,HIGH,CRITICAL \
-                      --format template \
-                      --template "@/usr/local/share/trivy/templates/html.tpl" \
-                      --output trivy-image-report.html \
+                      --format json \
+                      --output trivy-image-report.json \
                       temp-image:$TAG || true
                 '''
             }
@@ -163,7 +148,7 @@ pipeline {
             }
         }
 
-        stage("Deploy Container") {
+        stage("Deploy Container (With Rollback)") {
             steps {
                 withCredentials([
                     string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
@@ -175,26 +160,17 @@ pipeline {
                         ECR_URL=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
                         IMAGE=$ECR_URL/profilemappimg:$TAG
 
-                        echo "Checking existing container..."
-
                         if docker ps -a --format '{{.Names}}' | grep -q "^vprofile$"; then
-                            echo "Renaming existing container to backup..."
                             docker stop vprofile
                             docker rename vprofile vprofile_backup
                         fi
 
-                        echo "Starting new container..."
                         docker run -d --name vprofile -p 80:8080 $IMAGE
-
-                        echo "Waiting for app to start..."
                         sleep 15
 
-                        echo "Checking container health..."
                         if curl -f http://localhost/; then
-                            echo "New container is healthy. Removing backup..."
                             docker rm -f vprofile_backup || true
                         else
-                            echo "New container failed. Rolling back..."
                             docker rm -f vprofile
                             docker rename vprofile_backup vprofile
                             docker start vprofile
@@ -206,9 +182,7 @@ pipeline {
         }
 
         stage("DAST - OWASP ZAP [DAST]") {
-            when {
-                expression { params.SKIP_DAST == false }
-            }
+            when { expression { params.SKIP_DAST == false } }
             steps {
                 sh '''
                     docker run --rm \
@@ -218,38 +192,34 @@ pipeline {
                       zaproxy/zap-stable \
                       zap-baseline.py \
                       -t http://localhost \
-                      -r zap_report.html \
+                      -x zap_report.xml \
                       -J zap_report.json || true
                 '''
-
-                archiveArtifacts artifacts: 'zap_report.html,zap_report.json', allowEmptyArchive: true
-            }
-        }
-
-        stage("Archive Security Reports") {
-            steps {
-                archiveArtifacts(
-                    artifacts: '''
-                        trivy-fs-report.html,
-                        trivy-image-report.html,
-                        dependency-check-report.html,
-                        zap_report.html,
-                        zap_report.json
-                    '''.trim(),
-                    allowEmptyArchive: true
-                )
             }
         }
     }
 
     post {
-        success {
-            echo "✅ Pipeline Completed Successfully"
-        }
-        failure {
-            echo "❌ Pipeline Failed"
-        }
         always {
+
+            // Dependency Check Trend
+            dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+
+            // Trivy + ZAP Trend Graph (Warnings NG)
+            recordIssues tools: [
+                trivy(pattern: 'trivy-fs-report.json'),
+                trivy(pattern: 'trivy-image-report.json'),
+                owaspZap(pattern: 'zap_report.xml')
+            ]
+
+            archiveArtifacts artifacts: '''
+                trivy-fs-report.json,
+                trivy-image-report.json,
+                dependency-check-report.xml,
+                zap_report.xml,
+                zap_report.json
+            '''.trim(), allowEmptyArchive: true
+
             cleanWs()
         }
     }
