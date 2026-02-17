@@ -21,7 +21,9 @@ pipeline {
     stages {
 
         stage("Clean Workspace") {
-            steps { cleanWs() }
+            steps {
+                cleanWs()
+            }
         }
 
         stage("Checkout Code") {
@@ -36,8 +38,6 @@ pipeline {
                 sh 'mvn clean install -DskipTests'
             }
         }
-
-        // ================= JFROG VERSIONED UPLOAD =================
 
         stage("Publish Artifact to JFrog") {
             steps {
@@ -57,8 +57,6 @@ pipeline {
                 }
             }
         }
-
-        // ================= SONAR =================
 
         stage("SonarQube Analysis [SAST]") {
             steps {
@@ -81,8 +79,6 @@ pipeline {
             }
         }
 
-        // ================= OWASP =================
-
         stage("OWASP Dependency Check [SCA]") {
             steps {
                 dependencyCheck(
@@ -101,8 +97,6 @@ pipeline {
             }
         }
 
-        // ================= TRIVY FS =================
-
         stage("Trivy FS Scan [SCA]") {
             steps {
                 sh '''
@@ -118,8 +112,6 @@ pipeline {
             }
         }
 
-        // ================= DOCKER BUILD =================
-
         stage("Build Docker Image") {
             steps {
                 script {
@@ -129,8 +121,6 @@ pipeline {
                 }
             }
         }
-
-        // ================= TRIVY IMAGE =================
 
         stage("Trivy Image Scan [SCA]") {
             steps {
@@ -146,8 +136,6 @@ pipeline {
                 '''
             }
         }
-
-        // ================= PUSH TO ECR =================
 
         stage("Push to ECR") {
             steps {
@@ -169,15 +157,11 @@ pipeline {
             }
         }
 
-        // ================= MANUAL APPROVAL =================
-
         stage("Manual Approval") {
             steps {
                 input message: "Approve Deployment?"
             }
         }
-
-        // ================= DEPLOY =================
 
         stage("Deploy Container") {
             steps {
@@ -186,22 +170,40 @@ pipeline {
                     string(credentialsId: 'region', variable: 'AWS_REGION')
                 ]) {
                     sh '''
+                        set -e
+
                         ECR_URL=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
                         IMAGE=$ECR_URL/profilemappimg:$TAG
 
-                        EXISTING=$(docker ps -q --filter "publish=80")
-                        if [ -n "$EXISTING" ]; then
-                            docker stop $EXISTING
-                            docker rm $EXISTING
+                        echo "Checking existing container..."
+
+                        if docker ps -a --format '{{.Names}}' | grep -q "^vprofile$"; then
+                            echo "Renaming existing container to backup..."
+                            docker stop vprofile
+                            docker rename vprofile vprofile_backup
                         fi
 
+                        echo "Starting new container..."
                         docker run -d --name vprofile -p 80:8080 $IMAGE
+
+                        echo "Waiting for app to start..."
+                        sleep 15
+
+                        echo "Checking container health..."
+                        if curl -f http://localhost/; then
+                            echo "New container is healthy. Removing backup..."
+                            docker rm -f vprofile_backup || true
+                        else
+                            echo "New container failed. Rolling back..."
+                            docker rm -f vprofile
+                            docker rename vprofile_backup vprofile
+                            docker start vprofile
+                            exit 1
+                        fi
                     '''
                 }
             }
         }
-
-        // ================= DAST =================
 
         stage("DAST - OWASP ZAP [DAST]") {
             when {
@@ -224,25 +226,31 @@ pipeline {
             }
         }
 
-        // ================= ARCHIVE REPORTS =================
-
         stage("Archive Security Reports") {
             steps {
-                archiveArtifacts artifacts: '''
-                    trivy-fs-report.html,
-                    trivy-image-report.html,
-                    dependency-check-report.html,
-                    zap_report.html,
-                    zap_report.json
-                '''.trim(),
-                allowEmptyArchive: true
+                archiveArtifacts(
+                    artifacts: '''
+                        trivy-fs-report.html,
+                        trivy-image-report.html,
+                        dependency-check-report.html,
+                        zap_report.html,
+                        zap_report.json
+                    '''.trim(),
+                    allowEmptyArchive: true
+                )
             }
         }
     }
 
     post {
-        success { echo "✅ Pipeline Completed Successfully" }
-        failure { echo "❌ Pipeline Failed" }
-        always { cleanWs() }
+        success {
+            echo "✅ Pipeline Completed Successfully"
+        }
+        failure {
+            echo "❌ Pipeline Failed"
+        }
+        always {
+            cleanWs()
+        }
     }
 }
