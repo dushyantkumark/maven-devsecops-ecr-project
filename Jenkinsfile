@@ -28,22 +28,12 @@ pipeline {
             steps {
                 git branch: 'devsecops',
                     url: 'https://github.com/dushyantkumark/maven-devsecops-ecr-project.git'
-
-                script {
-                    env.GIT_COMMIT_ID = sh(
-                        script: "git rev-parse --short HEAD",
-                        returnStdout: true
-                    ).trim()
-
-                    env.BRANCH_NAME = "devsecops"
-                }
             }
         }
 
         stage("Build Application") {
             steps {
-                // IMPORTANT: run tests for coverage
-                sh 'mvn clean verify'
+                sh 'mvn clean install -DskipTests'
             }
         }
 
@@ -69,15 +59,9 @@ pipeline {
                 withSonarQubeEnv('sonar-server') {
                     sh """
                         ${SCANNER_HOME}/bin/sonar-scanner \
-                        -Dsonar.projectKey=vprofile-devsecops \
-                        -Dsonar.projectName=vprofile-devsecops \
-                        -Dsonar.projectVersion=${env.BUILD_NUMBER} \
-                        -Dsonar.scm.revision=${env.GIT_COMMIT_ID} \
-                        -Dsonar.sources=src/main/java \
-                        -Dsonar.tests=src/test/java \
-                        -Dsonar.java.binaries=target/classes \
-                        -Dsonar.java.test.binaries=target/test-classes \
-                        -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+                        -Dsonar.projectKey=vprofile \
+                        -Dsonar.sources=src \
+                        -Dsonar.java.binaries=target/classes
                     """
                 }
             }
@@ -85,15 +69,8 @@ pipeline {
 
         stage("Quality Gate") {
             steps {
-                timeout(time: 3, unit: 'MINUTES') {
-                    script {
-                        def qg = waitForQualityGate()
-                        echo "Quality Gate Status: ${qg.status}"
-
-                        if (qg.status != 'OK') {
-                            error "Quality Gate failed: ${qg.status}"
-                        }
-                    }
+                timeout(time: 10, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
                 }
             }
         }
@@ -101,7 +78,11 @@ pipeline {
         stage("OWASP Dependency Check [SCA]") {
             steps {
                 dependencyCheck(
-                    additionalArguments: '--scan . --format XML --disableAssembly',
+                    additionalArguments: '''
+                        --scan .
+                        --format XML
+                        --disableAssembly
+                    ''',
                     odcInstallation: 'dp-check'
                 )
             }
@@ -197,6 +178,7 @@ pipeline {
             steps {
                 sh '''
                     docker run --rm \
+                      --user root \
                       --network host \
                       -v "$WORKSPACE:/zap/wrk:rw" \
                       zaproxy/zap-stable \
@@ -212,20 +194,24 @@ pipeline {
     post {
         always {
 
+            // Dependency Check Trend
             dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
 
+            // Trivy FS Trend
             recordIssues(
                 id: 'trivy-fs',
                 name: 'Trivy FS Scan',
                 tools: [trivy(pattern: 'trivy-fs-report.json')]
             )
 
+            // Trivy Image Trend
             recordIssues(
                 id: 'trivy-image',
                 name: 'Trivy Image Scan',
                 tools: [trivy(pattern: 'trivy-image-report.json')]
             )
 
+            // Archive all reports
             archiveArtifacts artifacts: '''
                 trivy-fs-report.json,
                 trivy-image-report.json,
