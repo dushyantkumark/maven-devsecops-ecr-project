@@ -68,7 +68,7 @@ pipeline {
                         -Dsonar.projectName=vprofile-${env.BRANCH_NAME} \
                         -Dsonar.projectVersion=${env.BUILD_NUMBER} \
                         -Dsonar.scm.revision=${env.GIT_COMMIT_ID} \
-                        -Dsonar.sources=src \
+                        -Dsonar.sources=src/main/java \
                         -Dsonar.tests=src/test/java \
                         -Dsonar.java.binaries=target/classes
                     """
@@ -208,24 +208,20 @@ pipeline {
     post {
         always {
 
-            // Dependency Check Trend
             dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
 
-            // Trivy FS Trend
             recordIssues(
                 id: 'trivy-fs',
                 name: 'Trivy FS Scan',
                 tools: [trivy(pattern: 'trivy-fs-report.json')]
             )
 
-            // Trivy Image Trend
             recordIssues(
                 id: 'trivy-image',
                 name: 'Trivy Image Scan',
                 tools: [trivy(pattern: 'trivy-image-report.json')]
             )
 
-            // Archive reports
             archiveArtifacts artifacts: '''
                 trivy-fs-report.json,
                 trivy-image-report.json,
