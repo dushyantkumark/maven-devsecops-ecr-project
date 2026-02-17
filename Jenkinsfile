@@ -150,34 +150,26 @@ pipeline {
 
         stage("Deploy Container (With Rollback)") {
             steps {
-                withCredentials([
-                    string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
-                    string(credentialsId: 'region', variable: 'AWS_REGION')
-                ]) {
-                    sh '''
-                        set -e
+                sh '''
+                    set -e
 
-                        ECR_URL=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
-                        IMAGE=$ECR_URL/profilemappimg:$TAG
+                    if docker ps -a --format '{{.Names}}' | grep -q "^vprofile$"; then
+                        docker stop vprofile
+                        docker rename vprofile vprofile_backup
+                    fi
 
-                        if docker ps -a --format '{{.Names}}' | grep -q "^vprofile$"; then
-                            docker stop vprofile
-                            docker rename vprofile vprofile_backup
-                        fi
+                    docker run -d --name vprofile -p 80:8080 temp-image:$TAG
+                    sleep 15
 
-                        docker run -d --name vprofile -p 80:8080 $IMAGE
-                        sleep 15
-
-                        if curl -f http://localhost/; then
-                            docker rm -f vprofile_backup || true
-                        else
-                            docker rm -f vprofile
-                            docker rename vprofile_backup vprofile
-                            docker start vprofile
-                            exit 1
-                        fi
-                    '''
-                }
+                    if curl -f http://localhost/; then
+                        docker rm -f vprofile_backup || true
+                    else
+                        docker rm -f vprofile
+                        docker rename vprofile_backup vprofile
+                        docker start vprofile
+                        exit 1
+                    fi
+                '''
             }
         }
 
@@ -205,13 +197,13 @@ pipeline {
             // Dependency Check Trend
             dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
 
-            // Trivy + ZAP Trend Graph (Warnings NG)
+            // Trivy Trend Graph (Warnings NG)
             recordIssues tools: [
                 trivy(pattern: 'trivy-fs-report.json'),
-                trivy(pattern: 'trivy-image-report.json'),
-                owaspZap(pattern: 'zap_report.xml')
+                trivy(pattern: 'trivy-image-report.json')
             ]
 
+            // Archive all security reports
             archiveArtifacts artifacts: '''
                 trivy-fs-report.json,
                 trivy-image-report.json,
