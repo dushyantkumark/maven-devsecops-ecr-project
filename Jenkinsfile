@@ -22,12 +22,14 @@ pipeline {
     stages {
 
         stage("Clean Workspace") {
-            steps { cleanWs() }
+            steps {
+                cleanWs()
+            }
         }
 
         stage("Checkout Code") {
             steps {
-                git branch: "${BRANCH_NAME}",
+                git branch: env.BRANCH_NAME,
                     url: 'https://github.com/dushyantkumark/maven-devsecops-ecr-project.git'
             }
         }
@@ -36,8 +38,8 @@ pipeline {
             steps {
                 script {
                     env.VERSION = "2.0.${env.BUILD_NUMBER}"
-                    env.DOCKER_TAG = params.IMAGE_TAG?.trim() ? 
-                                     params.IMAGE_TAG : 
+                    env.DOCKER_TAG = params.IMAGE_TAG?.trim() ?
+                                     params.IMAGE_TAG :
                                      "${env.BRANCH_NAME}-${env.BUILD_NUMBER}"
 
                     echo "Version: ${env.VERSION}"
@@ -59,10 +61,10 @@ pipeline {
                     def ARTIFACT_NAME = "vprofile-${env.VERSION}.war"
 
                     sh """
-                        ${JFROG_CLI}/jf rt upload \
+                        ${env.JFROG_CLI}/jf rt upload \
                         target/vprofile-v2.war \
                         maven-local/${GROUP_PATH}/${ARTIFACT_NAME} \
-                        --server-id=${JFROG_SERVER}
+                        --server-id=${env.JFROG_SERVER}
                     """
                 }
             }
@@ -72,11 +74,10 @@ pipeline {
             steps {
                 withSonarQubeEnv('sonar-server') {
                     sh """
-                        ${SCANNER_HOME}/bin/sonar-scanner \
-                        -Dsonar.projectKey=vprofile \
-                        -Dsonar.projectName=vprofile \
+                        ${env.SCANNER_HOME}/bin/sonar-scanner \
+                        -Dsonar.projectKey=vprofile-${env.BRANCH_NAME} \
+                        -Dsonar.projectName=vprofile-${env.BRANCH_NAME} \
                         -Dsonar.projectVersion=${env.VERSION} \
-                        -Dsonar.branch.name=${env.BRANCH_NAME} \
                         -Dsonar.sources=src \
                         -Dsonar.java.binaries=target/classes
                     """
@@ -107,13 +108,13 @@ pipeline {
 
         stage("Trivy FS Scan [SCA]") {
             steps {
-                sh """
+                sh '''
                     trivy fs \
                       --severity MEDIUM,HIGH,CRITICAL \
                       --format json \
                       --output trivy-fs-report.json \
                       . || true
-                """
+                '''
             }
         }
 
@@ -125,13 +126,13 @@ pipeline {
 
         stage("Trivy Image Scan [SCA]") {
             steps {
-                sh """
+                sh '''
                     trivy image \
                       --severity MEDIUM,HIGH,CRITICAL \
                       --format json \
                       --output trivy-image-report.json \
-                      temp-image:${env.DOCKER_TAG} || true
-                """
+                      temp-image:$DOCKER_TAG || true
+                '''
             }
         }
 
@@ -142,17 +143,17 @@ pipeline {
                     string(credentialsId: 'region', variable: 'AWS_REGION'),
                     [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']
                 ]) {
-                    sh """
+                    sh '''
                         ECR_URL=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
                         aws ecr get-login-password --region $AWS_REGION \
                         | docker login --username AWS --password-stdin $ECR_URL
 
-                        docker tag temp-image:${env.DOCKER_TAG} \
-                                   $ECR_URL/${IMAGE_REPO}:${env.DOCKER_TAG}
+                        docker tag temp-image:$DOCKER_TAG \
+                                   $ECR_URL/profilemappimg:$DOCKER_TAG
 
-                        docker push $ECR_URL/${IMAGE_REPO}:${env.DOCKER_TAG}
-                    """
+                        docker push $ECR_URL/profilemappimg:$DOCKER_TAG
+                    '''
                 }
             }
         }
@@ -165,7 +166,7 @@ pipeline {
 
         stage("Deploy Container (With Rollback)") {
             steps {
-                sh """
+                sh '''
                     set -e
 
                     if docker ps -a --format '{{.Names}}' | grep -q "^vprofile$"; then
@@ -173,7 +174,7 @@ pipeline {
                         docker rename vprofile vprofile_backup
                     fi
 
-                    docker run -d --name vprofile -p 80:8080 temp-image:${env.DOCKER_TAG}
+                    docker run -d --name vprofile -p 80:8080 temp-image:$DOCKER_TAG
                     sleep 15
 
                     if curl -f http://localhost/; then
@@ -184,14 +185,14 @@ pipeline {
                         docker start vprofile
                         exit 1
                     fi
-                """
+                '''
             }
         }
 
         stage("DAST - OWASP ZAP [DAST]") {
             when { expression { params.SKIP_DAST == false } }
             steps {
-                sh """
+                sh '''
                     docker run --rm \
                       --user root \
                       --network host \
@@ -201,7 +202,7 @@ pipeline {
                       -t http://localhost \
                       -x zap_report.xml \
                       -J zap_report.json || true
-                """
+                '''
             }
         }
     }
