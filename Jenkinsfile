@@ -31,7 +31,7 @@ pipeline {
 
                 script {
                     env.GIT_COMMIT_ID = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-                    env.BRANCH_NAME  = sh(script: "git rev-parse --abbrev-ref HEAD", returnStdout: true).trim()
+                    env.BRANCH_NAME   = sh(script: "git rev-parse --abbrev-ref HEAD", returnStdout: true).trim()
                 }
             }
         }
@@ -69,6 +69,7 @@ pipeline {
                         -Dsonar.projectVersion=${env.BUILD_NUMBER} \
                         -Dsonar.scm.revision=${env.GIT_COMMIT_ID} \
                         -Dsonar.sources=src \
+                        -Dsonar.tests=src/test/java \
                         -Dsonar.java.binaries=target/classes
                     """
                 }
@@ -77,8 +78,13 @@ pipeline {
 
         stage("Quality Gate") {
             steps {
-                timeout(time: 10, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: true
+                script {
+                    def qg = waitForQualityGate()
+                    echo "Quality Gate Status: ${qg.status}"
+
+                    if (qg.status != 'OK') {
+                        error "Quality Gate failed: ${qg.status}"
+                    }
                 }
             }
         }
@@ -202,20 +208,24 @@ pipeline {
     post {
         always {
 
+            // Dependency Check Trend
             dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
 
+            // Trivy FS Trend
             recordIssues(
                 id: 'trivy-fs',
                 name: 'Trivy FS Scan',
                 tools: [trivy(pattern: 'trivy-fs-report.json')]
             )
 
+            // Trivy Image Trend
             recordIssues(
                 id: 'trivy-image',
                 name: 'Trivy Image Scan',
                 tools: [trivy(pattern: 'trivy-image-report.json')]
             )
 
+            // Archive reports
             archiveArtifacts artifacts: '''
                 trivy-fs-report.json,
                 trivy-image-report.json,
