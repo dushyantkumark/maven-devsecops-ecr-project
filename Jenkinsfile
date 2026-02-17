@@ -30,15 +30,20 @@ pipeline {
                     url: 'https://github.com/dushyantkumark/maven-devsecops-ecr-project.git'
 
                 script {
-                    env.GIT_COMMIT_ID = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-                    env.BRANCH_NAME   = sh(script: "git rev-parse --abbrev-ref HEAD", returnStdout: true).trim()
+                    env.GIT_COMMIT_ID = sh(
+                        script: "git rev-parse --short HEAD",
+                        returnStdout: true
+                    ).trim()
+
+                    env.BRANCH_NAME = "devsecops"
                 }
             }
         }
 
         stage("Build Application") {
             steps {
-                sh 'mvn clean install -DskipTests'
+                // IMPORTANT: run tests for coverage
+                sh 'mvn clean verify'
             }
         }
 
@@ -64,13 +69,15 @@ pipeline {
                 withSonarQubeEnv('sonar-server') {
                     sh """
                         ${SCANNER_HOME}/bin/sonar-scanner \
-                        -Dsonar.projectKey=vprofile-${env.BRANCH_NAME} \
-                        -Dsonar.projectName=vprofile-${env.BRANCH_NAME} \
+                        -Dsonar.projectKey=vprofile-devsecops \
+                        -Dsonar.projectName=vprofile-devsecops \
                         -Dsonar.projectVersion=${env.BUILD_NUMBER} \
                         -Dsonar.scm.revision=${env.GIT_COMMIT_ID} \
                         -Dsonar.sources=src/main/java \
                         -Dsonar.tests=src/test/java \
-                        -Dsonar.java.binaries=target/classes
+                        -Dsonar.java.binaries=target/classes \
+                        -Dsonar.java.test.binaries=target/test-classes \
+                        -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
                     """
                 }
             }
@@ -78,12 +85,14 @@ pipeline {
 
         stage("Quality Gate") {
             steps {
-                script {
-                    def qg = waitForQualityGate()
-                    echo "Quality Gate Status: ${qg.status}"
+                timeout(time: 3, unit: 'MINUTES') {
+                    script {
+                        def qg = waitForQualityGate()
+                        echo "Quality Gate Status: ${qg.status}"
 
-                    if (qg.status != 'OK') {
-                        error "Quality Gate failed: ${qg.status}"
+                        if (qg.status != 'OK') {
+                            error "Quality Gate failed: ${qg.status}"
+                        }
                     }
                 }
             }
@@ -92,11 +101,7 @@ pipeline {
         stage("OWASP Dependency Check [SCA]") {
             steps {
                 dependencyCheck(
-                    additionalArguments: '''
-                        --scan .
-                        --format XML
-                        --disableAssembly
-                    ''',
+                    additionalArguments: '--scan . --format XML --disableAssembly',
                     odcInstallation: 'dp-check'
                 )
             }
@@ -192,7 +197,6 @@ pipeline {
             steps {
                 sh '''
                     docker run --rm \
-                      --user root \
                       --network host \
                       -v "$WORKSPACE:/zap/wrk:rw" \
                       zaproxy/zap-stable \
