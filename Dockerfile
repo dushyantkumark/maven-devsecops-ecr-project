@@ -2,10 +2,15 @@ FROM tomcat:10-jdk21
 LABEL "Project"="Vprofile"
 LABEL "Author"="HarishNShetty"
 
-RUN rm -rf /usr/local/tomcat/webapps/*
-COPY target/vprofile-v2.war /usr/local/tomcat/webapps/ROOT.war
+RUN groupadd -r tomcat && useradd -r -g tomcat tomcat \
+    && rm -rf /usr/local/tomcat/webapps/*
 
-EXPOSE 8080
-CMD ["catalina.sh", "run"]
 WORKDIR /usr/local/tomcat/
+COPY --chown=tomcat:tomcat target/vprofile-v2.war /usr/local/tomcat/webapps/ROOT.war
+
+RUN chown -R tomcat:tomcat /usr/local/tomcat
+
+USER tomcat
+EXPOSE 8080
 VOLUME /usr/local/tomcat/webapps
+CMD ["catalina.sh", "run"]
