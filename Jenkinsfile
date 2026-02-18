@@ -16,6 +16,7 @@ pipeline {
         JFROG_CLI    = tool 'jfrog-cli'
         JFROG_SERVER = "jfrog-artifactory"
         IMAGE_REPO   = "profilemappimg"
+        DT_URL       = "http://15.206.73.80:8081"
     }
 
     stages {
@@ -51,25 +52,6 @@ pipeline {
             }
         }
 
-        stage("Publish Artifact to JFrog") {
-            steps {
-                script {
-                    def GROUP_PATH = "com/visualpathit/vprofile/${env.VERSION}"
-                    def ARTIFACT_NAME = "vprofile-${env.VERSION}.war"
-
-                    sh """
-                        ${env.JFROG_CLI}/jf rt upload \
-                        target/vprofile-v2.war \
-                        maven-local/${GROUP_PATH}/${ARTIFACT_NAME} \
-                        --server-id=${env.JFROG_SERVER}
-                    """
-                }
-            }
-        }
-
-        // =========================
-        // SAST - SonarQube
-        // =========================
         stage("SonarQube Analysis [SAST]") {
             steps {
                 withSonarQubeEnv('sonar-server') {
@@ -94,9 +76,6 @@ pipeline {
             }
         }
 
-        // =========================
-        // SCA - OWASP Dependency Check
-        // =========================
         stage("OWASP Dependency Check [SCA]") {
             steps {
                 dependencyCheck(
@@ -111,26 +90,26 @@ pipeline {
             }
         }
 
-        // =========================
-        // SCA - Trivy FS
-        // =========================
         stage("Trivy FS Scan [SCA]") {
             steps {
                 sh '''
-                    # JSON report
                     trivy fs \
                       --severity LOW,MEDIUM,HIGH,CRITICAL \
                       --format json \
                       --output trivy-fs-report.json \
                       . || true
 
-                    # HTML report
                     trivy fs \
                       --severity LOW,MEDIUM,HIGH,CRITICAL \
                       --format template \
                       --template "@/usr/local/share/trivy/templates/html.tpl" \
                       --output trivy-fs-report.html \
                       . || true
+
+                    trivy fs \
+                      --format cyclonedx \
+                      --output trivy-fs-sbom.json \
+                      .
                 '''
             }
         }
@@ -141,26 +120,60 @@ pipeline {
             }
         }
 
-        // =========================
-        // SCA - Trivy Image
-        // =========================
         stage("Trivy Image Scan [SCA]") {
             steps {
                 sh '''
-                    # JSON report
                     trivy image \
                       --severity LOW,MEDIUM,HIGH,CRITICAL \
                       --format json \
                       --output trivy-image-report.json \
                       temp-image:$DOCKER_TAG || true
 
-                    # HTML report
                     trivy image \
                       --severity LOW,MEDIUM,HIGH,CRITICAL \
                       --format template \
                       --template "@/usr/local/share/trivy/templates/html.tpl" \
                       --output trivy-image-report.html \
                       temp-image:$DOCKER_TAG || true
+
+                    trivy image \
+                      --format cyclonedx \
+                      --output trivy-image-sbom.json \
+                      temp-image:$DOCKER_TAG
+                '''
+            }
+        }
+
+        stage("Upload SBOM to Dependency-Track") {
+            steps {
+                withCredentials([string(credentialsId: 'dtrack-api-key', variable: 'DT_API_KEY')]) {
+                    sh '''
+                        curl -X POST $DT_URL/api/v1/bom \
+                          -H "X-Api-Key: $DT_API_KEY" \
+                          -F "projectName=vprofile" \
+                          -F "projectVersion=${VERSION}" \
+                          -F "autoCreate=true" \
+                          -F "bom=@trivy-fs-sbom.json"
+
+                        curl -X POST $DT_URL/api/v1/bom \
+                          -H "X-Api-Key: $DT_API_KEY" \
+                          -F "projectName=vprofile" \
+                          -F "projectVersion=${VERSION}" \
+                          -F "autoCreate=true" \
+                          -F "bom=@trivy-image-sbom.json"
+                    '''
+                }
+            }
+        }
+
+        stage("Fail if Critical Vulnerabilities Found") {
+            steps {
+                sh '''
+                    CRITICAL=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-image-report.json)
+                    if [ "$CRITICAL" -gt 0 ]; then
+                        echo "Critical vulnerabilities found: $CRITICAL"
+                        exit 1
+                    fi
                 '''
             }
         }
@@ -197,7 +210,6 @@ pipeline {
             steps {
                 sh '''
                     set -e
-
                     if docker ps -a --format '{{.Names}}' | grep -q "^vprofile$"; then
                         docker stop vprofile
                         docker rename vprofile vprofile_backup
@@ -218,9 +230,6 @@ pipeline {
             }
         }
 
-        // =========================
-        // DAST - OWASP ZAP
-        // =========================
         stage("DAST - OWASP ZAP [DAST]") {
             when { expression { params.SKIP_DAST == false } }
             steps {
@@ -262,6 +271,8 @@ pipeline {
                 trivy-fs-report.html,
                 trivy-image-report.json,
                 trivy-image-report.html,
+                trivy-fs-sbom.json,
+                trivy-image-sbom.json,
                 dependency-check-report.xml,
                 dependency-check-report.html,
                 zap_report.xml,
