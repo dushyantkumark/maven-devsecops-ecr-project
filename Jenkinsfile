@@ -17,6 +17,7 @@ pipeline {
         JFROG_SERVER = "jfrog-artifactory"
         IMAGE_REPO   = "profilemappimg"
         DT_URL       = "http://localhost:8081"
+        TRIVY_TEMPLATE = "/var/lib/jenkins/.trivy/contrib/html.tpl"
     }
 
     stages {
@@ -88,35 +89,28 @@ pipeline {
         }
 
         // =====================================================
-        // Trivy FS Scan (JSON + HTML + SBOM)
+        // Trivy FS Scan (Colorful HTML + JSON + SBOM)
         // =====================================================
         stage("Trivy FS Scan [SCA]") {
             steps {
-                sh '''
-                    mkdir -p .trivy/contrib
-
-                    if [ ! -f .trivy/contrib/html.tpl ]; then
-                        curl -s -L https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl \
-                        -o .trivy/contrib/html.tpl
-                    fi
-
+                sh """
                     trivy fs --scanners vuln \
                       --severity LOW,MEDIUM,HIGH,CRITICAL \
-                      --format json \
-                      --output trivy-fs-report.json \
+                      --format template \
+                      --template '@${TRIVY_TEMPLATE}' \
+                      --output trivy-fs-report.html \
                       . || true
 
                     trivy fs --scanners vuln \
-                      --format template \
-                      --template "@.trivy/contrib/html.tpl" \
-                      --output trivy-fs-report.html \
+                      --format json \
+                      --output trivy-fs-report.json \
                       . || true
 
                     trivy fs \
                       --format cyclonedx \
                       --output trivy-fs-sbom.json \
                       . || true
-                '''
+                """
             }
         }
 
@@ -127,28 +121,28 @@ pipeline {
         }
 
         // =====================================================
-        // Trivy Image Scan (JSON + HTML + SBOM)
+        // Trivy Image Scan (Colorful HTML + JSON + SBOM)
         // =====================================================
         stage("Trivy Image Scan [SCA]") {
             steps {
-                sh '''
+                sh """
                     trivy image --scanners vuln \
                       --severity LOW,MEDIUM,HIGH,CRITICAL \
-                      --format json \
-                      --output trivy-image-report.json \
-                      temp-image:$DOCKER_TAG || true
+                      --format template \
+                      --template '@${TRIVY_TEMPLATE}' \
+                      --output trivy-image-report.html \
+                      temp-image:${env.DOCKER_TAG} || true
 
                     trivy image --scanners vuln \
-                      --format template \
-                      --template "@.trivy/contrib/html.tpl" \
-                      --output trivy-image-report.html \
-                      temp-image:$DOCKER_TAG || true
+                      --format json \
+                      --output trivy-image-report.json \
+                      temp-image:${env.DOCKER_TAG} || true
 
                     trivy image \
                       --format cyclonedx \
                       --output trivy-image-sbom.json \
-                      temp-image:$DOCKER_TAG || true
-                '''
+                      temp-image:${env.DOCKER_TAG} || true
+                """
             }
         }
 
@@ -263,10 +257,10 @@ pipeline {
             )
 
             archiveArtifacts artifacts: '''
-                trivy-fs-report.json,
                 trivy-fs-report.html,
-                trivy-image-report.json,
                 trivy-image-report.html,
+                trivy-fs-report.json,
+                trivy-image-report.json,
                 trivy-fs-sbom.json,
                 trivy-image-sbom.json,
                 dependency-check-report.xml,
