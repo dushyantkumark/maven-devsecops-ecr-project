@@ -16,7 +16,7 @@ pipeline {
         JFROG_CLI    = tool 'jfrog-cli'
         JFROG_SERVER = "jfrog-artifactory"
         IMAGE_REPO   = "profilemappimg"
-        DT_URL       = "http://15.206.73.80:8081"
+        DT_URL       = "http://localhost:8081"
     }
 
     stages {
