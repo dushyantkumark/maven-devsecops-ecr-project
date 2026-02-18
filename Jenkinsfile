@@ -25,9 +25,7 @@ pipeline {
         }
 
         stage("Checkout Code") {
-            steps {
-                checkout scm
-            }
+            steps { checkout scm }
         }
 
         stage("Set Build Variables") {
@@ -97,7 +95,7 @@ pipeline {
         }
 
         // =========================
-        // SCA - Dependency Check
+        // SCA - OWASP Dependency Check
         // =========================
         stage("OWASP Dependency Check [SCA]") {
             steps {
@@ -119,16 +117,18 @@ pipeline {
         stage("Trivy FS Scan [SCA]") {
             steps {
                 sh '''
+                    # JSON report
                     trivy fs \
-                      --severity MEDIUM,HIGH,CRITICAL \
+                      --severity LOW,MEDIUM,HIGH,CRITICAL \
                       --format json \
                       --output trivy-fs-report.json \
                       . || true
 
+                    # HTML report
                     trivy fs \
-                      --severity MEDIUM,HIGH,CRITICAL \
+                      --severity LOW,MEDIUM,HIGH,CRITICAL \
                       --format template \
-                      --template "@contrib/html.tpl" \
+                      --template "@/usr/local/share/trivy/templates/html.tpl" \
                       --output trivy-fs-report.html \
                       . || true
                 '''
@@ -147,16 +147,18 @@ pipeline {
         stage("Trivy Image Scan [SCA]") {
             steps {
                 sh '''
+                    # JSON report
                     trivy image \
-                      --severity MEDIUM,HIGH,CRITICAL \
+                      --severity LOW,MEDIUM,HIGH,CRITICAL \
                       --format json \
                       --output trivy-image-report.json \
                       temp-image:$DOCKER_TAG || true
 
+                    # HTML report
                     trivy image \
-                      --severity MEDIUM,HIGH,CRITICAL \
+                      --severity LOW,MEDIUM,HIGH,CRITICAL \
                       --format template \
-                      --template "@contrib/html.tpl" \
+                      --template "@/usr/local/share/trivy/templates/html.tpl" \
                       --output trivy-image-report.html \
                       temp-image:$DOCKER_TAG || true
                 '''
@@ -243,8 +245,17 @@ pipeline {
 
             dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
 
-            recordIssues tools: [trivy(pattern: 'trivy-fs-report.json')]
-            recordIssues tools: [trivy(pattern: 'trivy-image-report.json')]
+            recordIssues(
+                id: 'trivy-fs',
+                name: 'Trivy FileSystem Scan',
+                tools: [trivy(pattern: 'trivy-fs-report.json')]
+            )
+
+            recordIssues(
+                id: 'trivy-image',
+                name: 'Trivy Image Scan',
+                tools: [trivy(pattern: 'trivy-image-report.json')]
+            )
 
             archiveArtifacts artifacts: '''
                 trivy-fs-report.json,
