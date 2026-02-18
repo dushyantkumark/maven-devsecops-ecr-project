@@ -16,21 +16,17 @@ pipeline {
         JFROG_CLI    = tool 'jfrog-cli'
         JFROG_SERVER = "jfrog-artifactory"
         IMAGE_REPO   = "profilemappimg"
-        BRANCH_NAME  = "devsecops"
     }
 
     stages {
 
         stage("Clean Workspace") {
-            steps {
-                cleanWs()
-            }
+            steps { cleanWs() }
         }
 
         stage("Checkout Code") {
             steps {
-                git branch: env.BRANCH_NAME,
-                    url: 'https://github.com/dushyantkumark/maven-devsecops-ecr-project.git'
+                checkout scm
             }
         }
 
@@ -38,10 +34,13 @@ pipeline {
             steps {
                 script {
                     env.VERSION = "2.0.${env.BUILD_NUMBER}"
+                    env.ACTIVE_BRANCH = env.BRANCH_NAME ?: "devsecops"
+
                     env.DOCKER_TAG = params.IMAGE_TAG?.trim() ?
                                      params.IMAGE_TAG :
-                                     "${env.BRANCH_NAME}-${env.BUILD_NUMBER}"
+                                     "${env.ACTIVE_BRANCH}-${env.BUILD_NUMBER}"
 
+                    echo "Branch: ${env.ACTIVE_BRANCH}"
                     echo "Version: ${env.VERSION}"
                     echo "Docker Tag: ${env.DOCKER_TAG}"
                 }
@@ -70,15 +69,18 @@ pipeline {
             }
         }
 
+        // =========================
+        // SAST - SonarQube
+        // =========================
         stage("SonarQube Analysis [SAST]") {
             steps {
                 withSonarQubeEnv('sonar-server') {
                     sh """
                         ${env.SCANNER_HOME}/bin/sonar-scanner \
-                        -Dsonar.projectKey=vprofile-${env.BRANCH_NAME} \
-                        -Dsonar.projectName=vprofile-${env.BRANCH_NAME} \
+                        -Dsonar.projectKey=vprofile \
+                        -Dsonar.projectName=vprofile \
                         -Dsonar.projectVersion=${env.VERSION} \
-                        -Dsonar.buildString=${env.BUILD_NUMBER} \
+                        -Dsonar.branch.name=${env.ACTIVE_BRANCH} \
                         -Dsonar.sources=src \
                         -Dsonar.java.binaries=target/classes
                     """
@@ -94,12 +96,16 @@ pipeline {
             }
         }
 
+        // =========================
+        // SCA - Dependency Check
+        // =========================
         stage("OWASP Dependency Check [SCA]") {
             steps {
                 dependencyCheck(
                     additionalArguments: '''
                         --scan .
                         --format XML
+                        --format HTML
                         --disableAssembly
                     ''',
                     odcInstallation: 'dp-check'
@@ -107,6 +113,9 @@ pipeline {
             }
         }
 
+        // =========================
+        // SCA - Trivy FS
+        // =========================
         stage("Trivy FS Scan [SCA]") {
             steps {
                 sh '''
@@ -114,6 +123,13 @@ pipeline {
                       --severity MEDIUM,HIGH,CRITICAL \
                       --format json \
                       --output trivy-fs-report.json \
+                      . || true
+
+                    trivy fs \
+                      --severity MEDIUM,HIGH,CRITICAL \
+                      --format template \
+                      --template "@contrib/html.tpl" \
+                      --output trivy-fs-report.html \
                       . || true
                 '''
             }
@@ -125,6 +141,9 @@ pipeline {
             }
         }
 
+        // =========================
+        // SCA - Trivy Image
+        // =========================
         stage("Trivy Image Scan [SCA]") {
             steps {
                 sh '''
@@ -132,6 +151,13 @@ pipeline {
                       --severity MEDIUM,HIGH,CRITICAL \
                       --format json \
                       --output trivy-image-report.json \
+                      temp-image:$DOCKER_TAG || true
+
+                    trivy image \
+                      --severity MEDIUM,HIGH,CRITICAL \
+                      --format template \
+                      --template "@contrib/html.tpl" \
+                      --output trivy-image-report.html \
                       temp-image:$DOCKER_TAG || true
                 '''
             }
@@ -190,6 +216,9 @@ pipeline {
             }
         }
 
+        // =========================
+        // DAST - OWASP ZAP
+        // =========================
         stage("DAST - OWASP ZAP [DAST]") {
             when { expression { params.SKIP_DAST == false } }
             steps {
@@ -202,7 +231,8 @@ pipeline {
                       zap-baseline.py \
                       -t http://localhost \
                       -x zap_report.xml \
-                      -J zap_report.json || true
+                      -J zap_report.json \
+                      -r zap_report.html || true
                 '''
             }
         }
@@ -213,24 +243,19 @@ pipeline {
 
             dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
 
-            recordIssues(
-                id: 'trivy-fs',
-                name: 'Trivy FS Scan',
-                tools: [trivy(pattern: 'trivy-fs-report.json')]
-            )
-
-            recordIssues(
-                id: 'trivy-image',
-                name: 'Trivy Image Scan',
-                tools: [trivy(pattern: 'trivy-image-report.json')]
-            )
+            recordIssues tools: [trivy(pattern: 'trivy-fs-report.json')]
+            recordIssues tools: [trivy(pattern: 'trivy-image-report.json')]
 
             archiveArtifacts artifacts: '''
                 trivy-fs-report.json,
+                trivy-fs-report.html,
                 trivy-image-report.json,
+                trivy-image-report.html,
                 dependency-check-report.xml,
+                dependency-check-report.html,
                 zap_report.xml,
-                zap_report.json
+                zap_report.json,
+                zap_report.html
             '''.trim(), allowEmptyArchive: true
 
             cleanWs()
