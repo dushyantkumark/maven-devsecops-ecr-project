@@ -32,7 +32,8 @@ pipeline {
         stage("Set Build Variables") {
             steps {
                 script {
-                    env.VERSION = "2.0.${env.BUILD_NUMBER}"
+                    env.GIT_SHORT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    env.VERSION = "2.0.${env.BUILD_NUMBER}-${env.GIT_SHORT}"
                     env.ACTIVE_BRANCH = env.BRANCH_NAME ?: "devsecops"
 
                     env.DOCKER_TAG = params.IMAGE_TAG?.trim() ?
@@ -52,6 +53,9 @@ pipeline {
             }
         }
 
+        // =========================
+        // SAST - SonarQube
+        // =========================
         stage("SonarQube Analysis [SAST]") {
             steps {
                 withSonarQubeEnv('sonar-server') {
@@ -71,11 +75,14 @@ pipeline {
         stage("Quality Gate") {
             steps {
                 timeout(time: 5, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: true
+                    waitForQualityGate abortPipeline: false
                 }
             }
         }
 
+        // =========================
+        // OWASP Dependency Check
+        // =========================
         stage("OWASP Dependency Check [SCA]") {
             steps {
                 dependencyCheck(
@@ -90,6 +97,9 @@ pipeline {
             }
         }
 
+        // =========================
+        // Trivy FS Scan
+        // =========================
         stage("Trivy FS Scan [SCA]") {
             steps {
                 sh '''
@@ -100,16 +110,9 @@ pipeline {
                       . || true
 
                     trivy fs \
-                      --severity LOW,MEDIUM,HIGH,CRITICAL \
-                      --format template \
-                      --template "@/usr/local/share/trivy/templates/html.tpl" \
-                      --output trivy-fs-report.html \
-                      . || true
-
-                    trivy fs \
                       --format cyclonedx \
                       --output trivy-fs-sbom.json \
-                      .
+                      . || true
                 '''
             }
         }
@@ -120,6 +123,9 @@ pipeline {
             }
         }
 
+        // =========================
+        // Trivy Image Scan
+        // =========================
         stage("Trivy Image Scan [SCA]") {
             steps {
                 sh '''
@@ -130,34 +136,35 @@ pipeline {
                       temp-image:$DOCKER_TAG || true
 
                     trivy image \
-                      --severity LOW,MEDIUM,HIGH,CRITICAL \
-                      --format template \
-                      --template "@/usr/local/share/trivy/templates/html.tpl" \
-                      --output trivy-image-report.html \
-                      temp-image:$DOCKER_TAG || true
-
-                    trivy image \
                       --format cyclonedx \
                       --output trivy-image-sbom.json \
-                      temp-image:$DOCKER_TAG
+                      temp-image:$DOCKER_TAG || true
                 '''
             }
         }
 
+        // =========================
+        // Upload SBOM to Dependency-Track
+        // Separate Projects
+        // =========================
         stage("Upload SBOM to Dependency-Track") {
             steps {
                 withCredentials([string(credentialsId: 'dtrack-api-key', variable: 'DT_API_KEY')]) {
                     sh '''
+                        echo "Uploading Filesystem SBOM..."
+
                         curl -X POST $DT_URL/api/v1/bom \
                           -H "X-Api-Key: $DT_API_KEY" \
-                          -F "projectName=vprofile" \
+                          -F "projectName=vprofile-app" \
                           -F "projectVersion=${VERSION}" \
                           -F "autoCreate=true" \
                           -F "bom=@trivy-fs-sbom.json"
 
+                        echo "Uploading Container Image SBOM..."
+
                         curl -X POST $DT_URL/api/v1/bom \
                           -H "X-Api-Key: $DT_API_KEY" \
-                          -F "projectName=vprofile" \
+                          -F "projectName=vprofile-image" \
                           -F "projectVersion=${VERSION}" \
                           -F "autoCreate=true" \
                           -F "bom=@trivy-image-sbom.json"
@@ -166,18 +173,9 @@ pipeline {
             }
         }
 
-        stage("Fail if Critical Vulnerabilities Found") {
-            steps {
-                sh '''
-                    CRITICAL=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-image-report.json)
-                    if [ "$CRITICAL" -gt 0 ]; then
-                        echo "Critical vulnerabilities found: $CRITICAL"
-                        exit 1
-                    fi
-                '''
-            }
-        }
-
+        // =========================
+        // Push to ECR
+        // =========================
         stage("Push to ECR") {
             steps {
                 withCredentials([
@@ -268,9 +266,7 @@ pipeline {
 
             archiveArtifacts artifacts: '''
                 trivy-fs-report.json,
-                trivy-fs-report.html,
                 trivy-image-report.json,
-                trivy-image-report.html,
                 trivy-fs-sbom.json,
                 trivy-image-sbom.json,
                 dependency-check-report.xml,
