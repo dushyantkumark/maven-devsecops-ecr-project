@@ -1,4 +1,4 @@
-FROM tomcat:10-jdk21
+FROM tomcat:10-jdk21-temurin-jammy
 LABEL "Project"="Vprofile"
 LABEL "Author"="HarishNShetty"
 
