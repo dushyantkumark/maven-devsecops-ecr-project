@@ -18,6 +18,7 @@ pipeline {
         IMAGE_REPO   = "profilemappimg"
         DT_URL       = "http://localhost:8081"
         TRIVY_TEMPLATE = "/var/lib/jenkins/.trivy/contrib/html.tpl"
+        S3_BUCKET = "central-report-collection-pocket"
     }
 
     stages {
@@ -45,9 +46,7 @@ pipeline {
         }
 
         stage("Build Application") {
-            steps {
-                sh 'mvn clean install -DskipTests'
-            }
+            steps { sh 'mvn clean install -DskipTests' }
         }
 
         stage("SonarQube Analysis [SAST]") {
@@ -88,16 +87,16 @@ pipeline {
             }
         }
 
-        // =====================================================
-        // Trivy FS Scan (Colorful HTML + JSON + SBOM)
-        // =====================================================
+        // -----------------------------
+        // Trivy FS Scan
+        // -----------------------------
         stage("Trivy FS Scan [SCA]") {
             steps {
                 sh """
                     trivy fs --scanners vuln \
                       --severity LOW,MEDIUM,HIGH,CRITICAL \
                       --format template \
-                      --template '@/var/lib/jenkins/.trivy/contrib/html.tpl' \
+                      --template '${TRIVY_TEMPLATE}' \
                       --output trivy-fs-report.html \
                       . || true
 
@@ -106,43 +105,50 @@ pipeline {
                       --output trivy-fs-report.json \
                       . || true
 
-                    trivy fs \
-                      --format cyclonedx \
-                      --output trivy-fs-sbom.json \
-                      . || true
+                    trivy fs --format cyclonedx --output trivy-fs-sbom.json . || true
                 """
+
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']]) {
+                    sh """
+                        aws s3 cp trivy-fs-report.json s3://${S3_BUCKET}/trivy-fs/${VERSION}/trivy-fs-report.json
+                        aws s3 cp trivy-fs-report.html s3://${S3_BUCKET}/trivy-fs/${VERSION}/trivy-fs-report.html
+                    """
+                }
             }
         }
 
         stage("Build Docker Image") {
-            steps {
-                sh "docker build -t temp-image:${env.DOCKER_TAG} ."
-            }
+            steps { sh "docker build -t temp-image:${env.DOCKER_TAG} ." }
         }
 
-        // =====================================================
-        // Trivy Image Scan (Colorful HTML + JSON + SBOM)
-        // =====================================================
+        // -----------------------------
+        // Trivy Image Scan
+        // -----------------------------
         stage("Trivy Image Scan [SCA]") {
             steps {
                 sh """
                     trivy image --scanners vuln \
                       --severity LOW,MEDIUM,HIGH,CRITICAL \
                       --format template \
-                      --template '@/var/lib/jenkins/.trivy/contrib/html.tpl' \
+                      --template '${TRIVY_TEMPLATE}' \
                       --output trivy-image-report.html \
-                      temp-image:${env.DOCKER_TAG} || true
+                      temp-image:${DOCKER_TAG} || true
 
-                    trivy image --scanners vuln \
-                      --format json \
+                    trivy image --format json \
                       --output trivy-image-report.json \
-                      temp-image:${env.DOCKER_TAG} || true
+                      temp-image:${DOCKER_TAG} || true
 
-                    trivy image \
-                      --format cyclonedx \
+                    trivy image --format cyclonedx \
                       --output trivy-image-sbom.json \
-                      temp-image:${env.DOCKER_TAG} || true
+                      temp-image:${DOCKER_TAG} || true
                 """
+
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']]) {
+                    sh """
+                        aws s3 cp trivy-image-report.json s3://${S3_BUCKET}/trivy-image/${VERSION}/trivy-image-report.json
+                        aws s3 cp trivy-image-report.html s3://${S3_BUCKET}/trivy-image/${VERSION}/trivy-image-report.html
+                    """
+                }
             }
         }
 
@@ -168,58 +174,9 @@ pipeline {
             }
         }
 
-        stage("Push to ECR") {
-            steps {
-                withCredentials([
-                    string(credentialsId: 'accountid', variable: 'AWS_ACCOUNT_ID'),
-                    string(credentialsId: 'region', variable: 'AWS_REGION'),
-                    [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']
-                ]) {
-                    sh '''
-                        ECR_URL=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
-
-                        aws ecr get-login-password --region $AWS_REGION \
-                        | docker login --username AWS --password-stdin $ECR_URL
-
-                        docker tag temp-image:$DOCKER_TAG \
-                                   $ECR_URL/profilemappimg:$DOCKER_TAG
-
-                        docker push $ECR_URL/profilemappimg:$DOCKER_TAG
-                    '''
-                }
-            }
-        }
-
-        stage("Manual Approval") {
-            steps {
-                input message: "Approve Deployment?"
-            }
-        }
-
-        stage("Deploy Container (With Rollback)") {
-            steps {
-                sh '''
-                    set -e
-                    if docker ps -a --format '{{.Names}}' | grep -q "^vprofile$"; then
-                        docker stop vprofile
-                        docker rename vprofile vprofile_backup
-                    fi
-
-                    docker run -d --name vprofile -p 80:8080 temp-image:$DOCKER_TAG
-                    sleep 15
-
-                    if curl -f http://localhost/; then
-                        docker rm -f vprofile_backup || true
-                    else
-                        docker rm -f vprofile
-                        docker rename vprofile_backup vprofile
-                        docker start vprofile
-                        exit 1
-                    fi
-                '''
-            }
-        }
-
+        // -----------------------------
+        // ZAP Scan Upload to S3
+        // -----------------------------
         stage("DAST - OWASP ZAP [DAST]") {
             when { expression { params.SKIP_DAST == false } }
             steps {
@@ -235,8 +192,16 @@ pipeline {
                       -J zap_report.json \
                       -r zap_report.html || true
                 '''
+
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']]) {
+                    sh """
+                        aws s3 cp zap_report.json s3://${S3_BUCKET}/zap/${VERSION}/zap_report.json
+                        aws s3 cp zap_report.xml s3://${S3_BUCKET}/zap/${VERSION}/zap_report.xml
+                    """
+                }
             }
         }
+
     }
 
     post {
