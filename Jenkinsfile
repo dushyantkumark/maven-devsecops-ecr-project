@@ -97,7 +97,7 @@ pipeline {
                     trivy fs --scanners vuln \
                       --severity LOW,MEDIUM,HIGH,CRITICAL \
                       --format template \
-                      --template '@${TRIVY_TEMPLATE}' \
+                      --template '@/var/lib/jenkins/.trivy/contrib/html.tpl' \
                       --output trivy-fs-report.html \
                       . || true
 
@@ -129,7 +129,7 @@ pipeline {
                     trivy image --scanners vuln \
                       --severity LOW,MEDIUM,HIGH,CRITICAL \
                       --format template \
-                      --template '@${TRIVY_TEMPLATE}' \
+                      --template '@/var/lib/jenkins/.trivy/contrib/html.tpl' \
                       --output trivy-image-report.html \
                       temp-image:${env.DOCKER_TAG} || true
 
