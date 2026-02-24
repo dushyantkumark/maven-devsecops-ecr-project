@@ -16,7 +16,7 @@ pipeline {
         JFROG_CLI    = tool 'jfrog-cli'
         JFROG_SERVER = "jfrog-artifactory"
         IMAGE_REPO   = "profilemappimg"
-        DT_URL       = "http://localhost:8081"
+        //DT_URL       = "http://localhost:8081"
         TRIVY_TEMPLATE = "/var/lib/jenkins/.trivy/contrib/html.tpl"
         S3_BUCKET = "central-report-collection-pocket"
     }
@@ -152,27 +152,59 @@ pipeline {
             }
         }
 
-        stage("Upload SBOM to Dependency-Track") {
+        stage("Manual Approval") {
             steps {
-                withCredentials([string(credentialsId: 'dtrack-api-key', variable: 'DT_API_KEY')]) {
-                    sh '''
-                        curl -X POST $DT_URL/api/v1/bom \
-                          -H "X-Api-Key: $DT_API_KEY" \
-                          -F "projectName=vprofile-fs" \
-                          -F "projectVersion=${VERSION}" \
-                          -F "autoCreate=true" \
-                          -F "bom=@trivy-fs-sbom.json"
-
-                        curl -X POST $DT_URL/api/v1/bom \
-                          -H "X-Api-Key: $DT_API_KEY" \
-                          -F "projectName=vprofile-image" \
-                          -F "projectVersion=${VERSION}" \
-                          -F "autoCreate=true" \
-                          -F "bom=@trivy-image-sbom.json"
-                    '''
-                }
+                input message: "Approve Deployment?"
             }
         }
+ 
+        stage("Deploy Container (With Rollback)") {
+            steps {
+                sh '''
+                    set -e
+ 
+                    if docker ps -a --format '{{.Names}}' | grep -q "^vprofile$"; then
+                        docker stop vprofile
+                        docker rename vprofile vprofile_backup
+                    fi
+ 
+                    docker run -d --name vprofile -p 80:8080 temp-image:$DOCKER_TAG
+                    sleep 15
+ 
+                    if curl -f http://localhost/; then
+                        docker rm -f vprofile_backup || true
+                    else
+                        docker rm -f vprofile
+                        docker rename vprofile_backup vprofile
+                        docker start vprofile
+                        exit 1
+                    fi
+                '''
+            }
+        }
+
+
+        // stage("Upload SBOM to Dependency-Track") {
+        //     steps {
+        //         withCredentials([string(credentialsId: 'dtrack-api-key', variable: 'DT_API_KEY')]) {
+        //             sh '''
+        //                 curl -X POST $DT_URL/api/v1/bom \
+        //                   -H "X-Api-Key: $DT_API_KEY" \
+        //                   -F "projectName=vprofile-fs" \
+        //                   -F "projectVersion=${VERSION}" \
+        //                   -F "autoCreate=true" \
+        //                   -F "bom=@trivy-fs-sbom.json"
+
+        //                 curl -X POST $DT_URL/api/v1/bom \
+        //                   -H "X-Api-Key: $DT_API_KEY" \
+        //                   -F "projectName=vprofile-image" \
+        //                   -F "projectVersion=${VERSION}" \
+        //                   -F "autoCreate=true" \
+        //                   -F "bom=@trivy-image-sbom.json"
+        //             '''
+        //         }
+        //     }
+        // }
 
         // -----------------------------
         // ZAP Scan Upload to S3
@@ -226,8 +258,6 @@ pipeline {
                 trivy-image-report.html,
                 trivy-fs-report.json,
                 trivy-image-report.json,
-                trivy-fs-sbom.json,
-                trivy-image-sbom.json,
                 dependency-check-report.xml,
                 dependency-check-report.html,
                 zap_report.xml,
