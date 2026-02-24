@@ -109,7 +109,6 @@ pipeline {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']]) {
                     sh """
                         aws s3 cp trivy-fs-report.json  s3://${S3_BUCKET}/trivy-fs/${VERSION}/
-                        aws s3 cp trivy-fs-report.html  s3://${S3_BUCKET}/trivy-fs/${VERSION}/
                     """
                 }
             }
@@ -143,7 +142,6 @@ pipeline {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']]) {
                     sh """
                         aws s3 cp trivy-image-report.json  s3://${S3_BUCKET}/trivy-image/${VERSION}/
-                        aws s3 cp trivy-image-report.html  s3://${S3_BUCKET}/trivy-image/${VERSION}/
                     """
                 }
             }
@@ -219,8 +217,6 @@ pipeline {
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']]) {
                     sh """
                         aws s3 cp zap_report.json s3://${S3_BUCKET}/zap/${VERSION}/
-                        aws s3 cp zap_report.xml  s3://${S3_BUCKET}/zap/${VERSION}/
-                        aws s3 cp zap_report.html s3://${S3_BUCKET}/zap/${VERSION}/
                     """
                 }
             }
@@ -274,3 +270,4 @@ pipeline {
         }
     }
 }
+
