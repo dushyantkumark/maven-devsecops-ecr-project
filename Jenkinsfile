@@ -9,7 +9,7 @@ pipeline {
 
     parameters {
         string(name: 'IMAGE_TAG', defaultValue: '', description: 'Optional custom image tag override')
-        booleanParam(name: 'SKIP_DAST', defaultValue: false, description: 'Skip OWASP ZAP scanning')
+        booleanParam(name: 'SKIP_DAST', defaultValue: false, description: 'Skip OWASP ZAP scan')
     }
 
     environment {
@@ -22,7 +22,6 @@ pipeline {
 
     stages {
 
-
         stage("Clean Workspace") {
             steps { cleanWs() }
         }
@@ -31,7 +30,6 @@ pipeline {
             steps { checkout scm }
         }
 
-
         stage("Set Build Variables") {
             steps {
                 script {
@@ -39,7 +37,6 @@ pipeline {
                     env.VERSION       = "2.0.${env.BUILD_NUMBER}-${env.GIT_SHORT}"
                     env.ACTIVE_BRANCH = env.BRANCH_NAME ?: "devsecops"
 
-                    // If user passed IMAGE_TAG, use it. Otherwise auto-generate based on branch + build.
                     env.DOCKER_TAG = params.IMAGE_TAG?.trim() ?
                                      params.IMAGE_TAG :
                                      "${env.ACTIVE_BRANCH}-${env.BUILD_NUMBER}"
@@ -47,13 +44,11 @@ pipeline {
             }
         }
 
-
         stage("Build Application") {
             steps {
                 sh 'mvn clean install -DskipTests'
             }
         }
-
 
         stage("SonarQube Analysis [SAST]") {
             steps {
@@ -79,7 +74,6 @@ pipeline {
             }
         }
 
-
         stage("OWASP Dependency Check [SCA]") {
             steps {
                 dependencyCheck(
@@ -94,23 +88,20 @@ pipeline {
             }
         }
 
-
         stage("Trivy FS Scan [SCA]") {
             steps {
                 sh """
-                    trivy fs \
-                      --scanners vuln \
-                      --severity LOW,MEDIUM,HIGH,CRITICAL \
-                      --format template \
-                      --template '${TRIVY_TEMPLATE}' \
-                      --output trivy-fs-report.html \
-                      . || true
+                    trivy fs --scanners vuln \
+                        --severity LOW,MEDIUM,HIGH,CRITICAL \
+                        --format template \
+                        --template '${TRIVY_TEMPLATE}' \
+                        --output trivy-fs-report.html \
+                        . || true
 
-                    trivy fs \
-                      --scanners vuln \
-                      --format json \
-                      --output trivy-fs-report.json \
-                      . || true
+                    trivy fs --scanners vuln \
+                        --format json \
+                        --output trivy-fs-report.json \
+                        . || true
 
                     trivy fs --format cyclonedx --output trivy-fs-sbom.json . || true
                 """
@@ -124,34 +115,29 @@ pipeline {
             }
         }
 
-
         stage("Build Docker Image") {
             steps {
                 sh "docker build -t temp-image:${DOCKER_TAG} ."
             }
         }
 
-
         stage("Trivy Image Scan [SCA]") {
             steps {
                 sh """
-                    trivy image \
-                      --scanners vuln \
-                      --severity LOW,MEDIUM,HIGH,CRITICAL \
-                      --format template \
-                      --template '${TRIVY_TEMPLATE}' \
-                      --output trivy-image-report.html \
-                      temp-image:${DOCKER_TAG} || true
+                    trivy image --scanners vuln \
+                        --severity LOW,MEDIUM,HIGH,CRITICAL \
+                        --format template \
+                        --template '${TRIVY_TEMPLATE}' \
+                        --output trivy-image-report.html \
+                        temp-image:${DOCKER_TAG} || true
 
-                    trivy image \
-                      --format json \
-                      --output trivy-image-report.json \
-                      temp-image:${DOCKER_TAG} || true
+                    trivy image --format json \
+                        --output trivy-image-report.json \
+                        temp-image:${DOCKER_TAG} || true
 
-                    trivy image \
-                      --format cyclonedx \
-                      --output trivy-image-sbom.json \
-                      temp-image:${DOCKER_TAG} || true
+                    trivy image --format cyclonedx \
+                        --output trivy-image-sbom.json \
+                        temp-image:${DOCKER_TAG} || true
                 """
 
                 withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'awscred']]) {
@@ -163,20 +149,17 @@ pipeline {
             }
         }
 
-
         stage("Manual Approval") {
             steps {
                 input message: "Approve Deployment?"
             }
         }
 
-
         stage("Deploy Container (With Rollback)") {
             steps {
                 sh '''
                     set -e
 
-                    # If an older container exists, preserve it for rollback
                     if docker ps -a --format '{{.Names}}' | grep -q "^vprofile$"; then
                         docker stop vprofile
                         docker rename vprofile vprofile_backup
@@ -185,11 +168,10 @@ pipeline {
                     docker run -d --name vprofile -p 80:8080 temp-image:$DOCKER_TAG
                     sleep 15
 
-                    # Health check
                     if curl -f http://localhost/; then
                         docker rm -f vprofile_backup || true
                     else
-                        echo "Deployment failed — rolling back"
+                        echo "Deployment failed — rolling back..."
                         docker rm -f vprofile
                         docker rename vprofile_backup vprofile
                         docker start vprofile
@@ -199,22 +181,7 @@ pipeline {
             }
         }
 
-
-        stage("Cleanup Unused Docker Images") {
-            steps {
-                sh '''
-                    echo "Cleaning unused Docker images..."
-
-                    # Remove untagged images
-                    docker image prune -f
-
-                    # Remove unused images older than 24 hours
-                    docker image prune -a -f --filter "until=24h"
-
-                    echo "Docker cleanup completed."
-                '''
-            }
-        }
+        
 
 
         stage("DAST - OWASP ZAP [DAST]") {
@@ -222,15 +189,14 @@ pipeline {
             steps {
 
                 script {
-                    // Use Jenkins host IP. ZAP inside Docker cannot scan "localhost".
                     env.HOST_IP = sh(
-                        script: "hostname -I | awk '{print $1}'",
+                        script: 'hostname -I | awk \'{print $1}\'',
                         returnStdout: true
                     ).trim()
                 }
 
                 sh """
-                    echo "Running OWASP ZAP baseline scan against http://${HOST_IP}"
+                    echo "Running OWASP ZAP against http://${HOST_IP}"
 
                     docker run --rm \
                         --user root \
@@ -241,11 +207,9 @@ pipeline {
                         -t http://${HOST_IP} \
                         -x zap_report.xml \
                         -J zap_report.json \
-                        -r zap_report.html \
-                        || true
+                        -r zap_report.html || true
                 """
 
-                // Ensure reports always exist
                 sh """
                     [ -f zap_report.json ] || echo '{}' > zap_report.json
                     [ -f zap_report.xml ]  || echo '<zap></zap>' > zap_report.xml
@@ -261,8 +225,21 @@ pipeline {
                 }
             }
         }
-    }
+        
+        stage("Cleanup Unused Docker Images") {
+            steps {
+                sh '''
+                    echo "Cleaning unused Docker images..."
 
+                    docker image prune -f
+                    docker image prune -a -f --filter "until=24h"
+
+                    echo "Docker cleanup complete."
+                '''
+            }
+        }
+
+    }
 
     post {
         always {
